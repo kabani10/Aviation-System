@@ -1,0 +1,38 @@
+name: aviation-system
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-aviation_system}
+      POSTGRES_USER: ${DB_USERNAME:-aviation}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - aviation-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-aviation}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - aviation-redis-data:/data
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Web UI
+
+volumes:
+  aviation-postgres-data:
+  aviation-redis-data:

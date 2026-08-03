@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_sqlite, redis
+          coverage: none
+
+      - name: Copy .env
+        run: cp .env.example .env
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Generate app key
+        run: php artisan key:generate
+
+      - name: Check code style
+        run: ./vendor/bin/pint --test
+
+      - name: Run tests
+        run: ./vendor/bin/pest
