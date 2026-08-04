@@ -162,11 +162,40 @@ email lands on the `Company` itself for now (`ReceiveInboundEmail`) — matching
 needs the Flight Request module, which doesn't exist yet. Attachments become `Document`s on the
 `Communication`, not on the company directly, since they belong to the email.
 
-**Standalone resources now, `RelationManager`s later.** `DocumentResource` and `CommunicationResource`
-currently show *everything* in the tenant regardless of what it's attached to — there's no
-Customer/Supplier/FlightRequest yet to scope a per-record view to. Once those exist, give each its own
-`DocumentsRelationManager` / `CommunicationsRelationManager` over the same underlying model instead of
-duplicating table code; keep the standalone resources as the "browse everything" view.
+**Standalone resources for "browse everything", shared `RelationManager`s for "this record's".**
+`DocumentResource` and `CommunicationResource` show everything in the tenant regardless of what it's
+attached to. `App\Filament\RelationManagers\DocumentsRelationManager` and `CommunicationsRelationManager`
+are the per-record view — two classes, reused everywhere, not one pair per module. They work on any
+resource because the relationship name is always `documents`/`communications` (from the `HasDocuments`
+/ `HasCommunications` traits) regardless of the owning model, so the same class attaches to
+`CustomerResource`, `AircraftResource`, and whatever comes next via `getRelations()`. Model-specific
+`RelationManager`s (`ContactsRelationManager`, `AircraftRelationManager` under `CustomerResource`)
+stay nested under their resource as usual — only Documents/Communications are generic enough to share.
+
+## Customers & Aircraft
+
+`App\Domain\Customers\Models\Customer` — a client of the tenant (an operator or broker), not to be
+confused with `App\Domain\Tenancy\Models\Company` (the tenant itself). Has its own contacts
+(`CustomerContact`, via `ContactsRelationManager`) and fleet (`Aircraft`, via `AircraftRelationManager`
+on `CustomerResource`, and its own standalone `AircraftResource` for fleet-wide search across
+customers). Both `Customer` and `Aircraft` carry `company_id` directly (`BelongsToCompany`) rather than
+only being reachable through a join — same reasoning as `Document`/`Communication`: a direct,
+independently-scoped column is what `CompanyScope` actually filters on, not a relationship path.
+
+**First policies built on granular permissions, not role names.** `CustomerPolicy` / `AircraftPolicy` /
+`CustomerContactPolicy` check `$user->can('customers.view')` / `can('customers.manage')` — permissions
+already defined in `RolesAndPermissionsSeeder` (Sales has both) rather than `hasRole('Sales')` directly.
+Prefer this pattern for new modules: check the permission, not the role, so a future "give Finance
+read-only customer access" is a one-line seeder change, not a policy rewrite.
+
+**Known gap, not an oversight:** only Sales currently has `customers.*`. Operations and Management have
+no permission to view customer records at all under the current seeder, which will matter once Flight
+Request needs to show operators the customer behind a flight — worth revisiting when that module is
+built, not fixed unilaterally here.
+
+**Deliberately not modeled yet:** the original spec's "preferred suppliers" per customer. It needs the
+Supplier module (Phase 4) to be a real relationship; a placeholder field now would just get thrown away
+and rebuilt, which is the "half-finished implementation" this project's conventions explicitly avoid.
 
 ## What NOT to do
 
@@ -175,9 +204,11 @@ duplicating table code; keep the standalone resources as the "browse everything"
 - Don't forget a field in `#[Fillable]` and assume mass-assignment will just work — Eloquent silently
   drops non-fillable attributes from `create()`/`fill()` rather than throwing, so the failure mode is a
   `NOT NULL constraint` error (or worse, a silently-null field) far from the line that's actually
-  wrong. Hit twice while building Documents/Communications. If a field is only ever set by trusted
-  application code (never a form), it can still go in `#[Fillable]` — mass-assignment protection is
-  about what a *form* can set, not about hiding a field from your own Actions.
+  wrong. Hit three times so far (`Document`'s storage metadata, `Communication`'s `author_id`,
+  `Aircraft`'s `customer_id`) — check this first when a create fails with a NOT NULL error on a field
+  the form clearly submitted. If a field is only ever set by trusted application code (never a form),
+  it can still go in `#[Fillable]` — mass-assignment protection is about what a *form* can set, not
+  about hiding a field from your own Actions.
 - Don't call the Claude API directly from a Filament resource or an Action outside `app/AI` — route
   it through an `AI/*` class so retries, logging, and failure handling are consistent.
 - Don't put validation in the model. Use Form Requests (Filament form validation for panel forms,

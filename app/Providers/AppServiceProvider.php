@@ -2,6 +2,12 @@
 
 namespace App\Providers;
 
+use App\Domain\Aircraft\Models\Aircraft;
+use App\Domain\Aircraft\Policies\AircraftPolicy;
+use App\Domain\Customers\Models\Customer;
+use App\Domain\Customers\Models\CustomerContact;
+use App\Domain\Customers\Policies\CustomerContactPolicy;
+use App\Domain\Customers\Policies\CustomerPolicy;
 use App\Domain\Tenancy\Policies\UserPolicy;
 use App\Models\User;
 use App\Support\Tenancy\CurrentCompany;
@@ -28,6 +34,9 @@ class AppServiceProvider extends ServiceProvider
         Gate::before(fn (User $user) => $user->hasRole('Admin') ? true : null);
 
         Gate::policy(User::class, UserPolicy::class);
+        Gate::policy(Customer::class, CustomerPolicy::class);
+        Gate::policy(CustomerContact::class, CustomerContactPolicy::class);
+        Gate::policy(Aircraft::class, AircraftPolicy::class);
 
         // Defends against session fixation: without this, a session cookie
         // planted before login (with 2fa_passed already true) would let an

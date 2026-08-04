@@ -3,6 +3,7 @@
 namespace App\Domain\Tenancy\Models;
 
 use App\Domain\Communications\Concerns\HasCommunications;
+use App\Domain\Customers\Models\Customer;
 use App\Domain\Documents\Concerns\HasDocuments;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -34,6 +35,11 @@ class Company extends Model
     public function users(): HasMany
     {
         return $this->hasMany(User::class);
+    }
+
+    public function customers(): HasMany
+    {
+        return $this->hasMany(Customer::class);
     }
 
     public function isSuspended(): bool

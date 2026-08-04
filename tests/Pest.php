@@ -63,3 +63,12 @@ function adminFor(Company $company): User
 
     return $admin;
 }
+
+/** A Sales user for $company — doesn't need the 2FA dance, only Admin is required to have it. */
+function salesUserFor(Company $company): User
+{
+    $user = User::factory()->for($company)->create();
+    $user->assignRole('Sales');
+
+    return $user;
+}
