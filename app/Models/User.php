@@ -3,6 +3,8 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Domain\Communications\Concerns\HasCommunications;
+use App\Domain\Documents\Concerns\HasDocuments;
 use App\Domain\Shared\Concerns\BelongsToCompany;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
@@ -21,7 +23,7 @@ use Spatie\Permission\Traits\HasRoles;
 class User extends Authenticatable implements FilamentUser
 {
     /** @use HasFactory<UserFactory> */
-    use BelongsToCompany, HasFactory, HasRoles, LogsActivity, Notifiable;
+    use BelongsToCompany, HasCommunications, HasDocuments, HasFactory, HasRoles, LogsActivity, Notifiable;
 
     /**
      * Get the attributes that should be cast.
@@ -48,6 +50,12 @@ class User extends Authenticatable implements FilamentUser
     public function hasEnabledTwoFactorAuthentication(): bool
     {
         return $this->two_factor_confirmed_at !== null;
+    }
+
+    /** See Document::subjectLabel() / Communication::subjectLabel(). */
+    public function displayLabel(): string
+    {
+        return "Employee: {$this->name}";
     }
 
     /**

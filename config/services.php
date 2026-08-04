@@ -16,6 +16,7 @@ return [
 
     'postmark' => [
         'key' => env('POSTMARK_API_KEY'),
+        'inbound_secret' => env('POSTMARK_INBOUND_SECRET'),
     ],
 
     'resend' => [

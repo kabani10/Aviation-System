@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\CompanyRegistrationController;
+use App\Http\Controllers\DocumentDownloadController;
 use App\Http\Controllers\SetPasswordController;
 use App\Http\Controllers\TwoFactorChallengeController;
 use Illuminate\Support\Facades\Route;
@@ -24,4 +25,8 @@ Route::middleware('auth')->group(function () {
         ->name('two-factor.challenge');
     Route::post('/two-factor-challenge', [TwoFactorChallengeController::class, 'store'])
         ->name('two-factor.challenge.store');
+
+    Route::get('/documents/{document}/download', DocumentDownloadController::class)
+        ->name('documents.download')
+        ->middleware('signed');
 });

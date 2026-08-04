@@ -49,10 +49,25 @@ Single database, every tenant-owned table carries `company_id`. Isolation is enf
 
 1. **`App\Domain\Shared\Concerns\BelongsToCompany`** — a trait applied to every tenant-owned model.
    It registers `CompanyScope` (a global scope that filters every query to the current company) and
-   auto-fills `company_id` on create.
+   fills `company_id` on create **only when the caller hasn't already set it** — e.g. `->for($company)`
+   in a factory, or an explicit assignment in an Action. It's a default, not an override: earlier code
+   had this unconditional, and a `CurrentCompany` left set from earlier in the same request/console
+   command/test silently reassigned records to the wrong tenant. Caught by the "company A creating a
+   fixture for company B" pattern in tests — if you write a test that sets `CurrentCompany` and then
+   creates something for a *different* company afterward, that's exactly the case this guards.
 2. **`App\Support\Tenancy\CurrentCompany`** — a request-scoped singleton holding "which company is
    this?". Set by `App\Http\Middleware\SetCurrentCompany` from the authenticated user on every web
    and Filament request.
+
+**Middleware order matters more than it looks like it should.** `SetCurrentCompany` is appended to the
+`web` group, but Laravel's `SubstituteBindings` (which resolves `{model}` route parameters — where
+`CompanyScope` would apply) runs *before* anything merely appended to a group. Route-model-binding a
+tenant-scoped model in a plain `routes/web.php` route was resolving unscoped until
+`bootstrap/app.php` explicitly reordered it with `prependToPriorityList`. Because that's the kind of
+thing a future refactor can silently reintroduce, any controller resolving a tenant-scoped model by
+route parameter (`DocumentDownloadController` is the current example) also checks `company_id`
+explicitly rather than trusting the binding was scoped — middleware order is defense in depth, not
+the actual boundary.
 
 **Queued jobs and console commands don't go through HTTP middleware.** Any job that touches a
 tenant-owned model must set `CurrentCompany` explicitly at the top of `handle()`, from the model it
@@ -121,19 +136,48 @@ at the point they happen — see `app/Domain/Tenancy/Actions`.
 
 ## Documents & communications
 
-Both are polymorphic and cross-cutting — almost every module attaches to them:
+Both are polymorphic and cross-cutting — `app/Domain/Documents` and `app/Domain/Communications`.
+Any model can hold either by using `HasDocuments` / `HasCommunications` (Company and User do today);
+a model that wants a nicer "attached to X" label than `ClassName #id` implements `displayLabel(): string`
+— see `Document::subjectLabel()`. Both are company-scoped in their own right (`BelongsToCompany`), on
+top of belonging to whatever they're attached to.
 
-- `documents` — polymorphic `documentable`, private storage (signed URLs only, never a public disk).
-- `communications` — polymorphic `communicable`, the single timeline (email in/out, notes, call
-  summaries, WhatsApp, system events) that both humans and the AI layer read for context.
+- **`documents`** — `App\Domain\Documents\Actions\UploadDocument` is the only place a file is written
+  to disk (the private `documents` filesystem disk, local in dev, swap to S3 in prod via
+  `DOCUMENTS_DISK_DRIVER`). Never served directly — always through `DocumentDownloadController`'s
+  `signed` route, and that controller checks `company_id` itself rather than trusting the route
+  binding (see the middleware-order note above).
+- **`communications`** — `App\Domain\Communications\Actions\LogCommunication` is the single write
+  path, used both for manual notes/call-summaries and by the inbound-email webhook, so every entry is
+  created the same way regardless of source. `CommunicationType` (email_in/email_out/note/
+  call_summary/whatsapp/system_event) is a real PHP enum, not a string column with a convention.
 
-Inbound email lands via a Postmark inbound-parse webhook (`routes/api.php`), gets matched to a
-tenant and a flight, and is written to `communications` before anything else happens to it.
+**Inbound email** — `App\Http\Controllers\PostmarkInboundController`, `POST
+/api/webhooks/postmark/inbound/{company:slug}?token=...`. `routes/api.php` carries the `api`
+middleware group, not `web` — there's no session, so `CurrentCompany` is set explicitly in the
+controller (same convention as queued jobs) rather than via `SetCurrentCompany`. The shared secret
+(`POSTMARK_INBOUND_SECRET`, checked with `hash_equals`) stands in for authentication, since there's no
+logged-in user; the company is resolved from the URL, not from anything in the payload. Every inbound
+email lands on the `Company` itself for now (`ReceiveInboundEmail`) — matching it to a specific flight
+needs the Flight Request module, which doesn't exist yet. Attachments become `Document`s on the
+`Communication`, not on the company directly, since they belong to the email.
+
+**Standalone resources now, `RelationManager`s later.** `DocumentResource` and `CommunicationResource`
+currently show *everything* in the tenant regardless of what it's attached to — there's no
+Customer/Supplier/FlightRequest yet to scope a per-record view to. Once those exist, give each its own
+`DocumentsRelationManager` / `CommunicationsRelationManager` over the same underlying model instead of
+duplicating table code; keep the standalone resources as the "browse everything" view.
 
 ## What NOT to do
 
 - Don't add a model without `BelongsToCompany` unless it's genuinely global (e.g. `Airport`,
   `Country` — shared reference data, not owned by a tenant).
+- Don't forget a field in `#[Fillable]` and assume mass-assignment will just work — Eloquent silently
+  drops non-fillable attributes from `create()`/`fill()` rather than throwing, so the failure mode is a
+  `NOT NULL constraint` error (or worse, a silently-null field) far from the line that's actually
+  wrong. Hit twice while building Documents/Communications. If a field is only ever set by trusted
+  application code (never a form), it can still go in `#[Fillable]` — mass-assignment protection is
+  about what a *form* can set, not about hiding a field from your own Actions.
 - Don't call the Claude API directly from a Filament resource or an Action outside `app/AI` — route
   it through an `AI/*` class so retries, logging, and failure handling are consistent.
 - Don't put validation in the model. Use Form Requests (Filament form validation for panel forms,

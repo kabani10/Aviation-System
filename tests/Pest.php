@@ -1,5 +1,7 @@
 <?php
 
+use App\Domain\Tenancy\Models\Company;
+use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -48,7 +50,16 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+/**
+ * An Admin belonging to $company, with 2FA already confirmed — most tests
+ * aren't about 2FA and would otherwise get redirected to the setup page on
+ * every panel request. Pair with ->withSession(['2fa_passed' => true]) to
+ * also clear the post-login challenge.
+ */
+function adminFor(Company $company): User
 {
-    // ..
+    $admin = User::factory()->for($company)->withTwoFactorConfirmed()->create();
+    $admin->assignRole('Admin');
+
+    return $admin;
 }
