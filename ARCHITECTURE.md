@@ -158,9 +158,10 @@ middleware group, not `web` — there's no session, so `CurrentCompany` is set e
 controller (same convention as queued jobs) rather than via `SetCurrentCompany`. The shared secret
 (`POSTMARK_INBOUND_SECRET`, checked with `hash_equals`) stands in for authentication, since there's no
 logged-in user; the company is resolved from the URL, not from anything in the payload. Every inbound
-email lands on the `Company` itself for now (`ReceiveInboundEmail`) — matching it to a specific flight
-needs the Flight Request module, which doesn't exist yet. Attachments become `Document`s on the
-`Communication`, not on the company directly, since they belong to the email.
+email still lands on the `Company` itself for now (`ReceiveInboundEmail`) even though `FlightRequest`
+exists as of Phase 5 — matching an email to the *right* flight needs the AI extraction phases (reading
+the message, matching customer/route/dates), not just a place to put it. Attachments become
+`Document`s on the `Communication`, not on the company directly, since they belong to the email.
 
 **Standalone resources for "browse everything", shared `RelationManager`s for "this record's".**
 `DocumentResource` and `CommunicationResource` show everything in the tenant regardless of what it's
@@ -228,6 +229,48 @@ that's genuinely just something procurement writes down, not something derived f
 that already existed in `RolesAndPermissionsSeeder` since Phase 1 (Operations and Management view-only,
 Procurement both); this is the first module to actually use them, same permission-over-role pattern as
 `CustomerPolicy`.
+
+## Flight Requests
+
+`App\Domain\FlightRequests\Models\FlightRequest` is the central record from the original spec —
+customer, aircraft, route (`originAirport`/`destinationAirport`, both real `Airport` references),
+times, passenger/crew counts, `FlightStatus`, assigned employees (`assignedUsers`, a plain
+`BelongsToMany` to `User`), plus `HasDocuments`/`HasCommunications` — this is what those two modules
+were built for. `FlightStatus` mirrors the spec's Step 11 lifecycle with one addition: `Cancelled`,
+which the spec covers for individual services but never states for the flight itself — an omission,
+not a deliberate scope line, so it's included.
+
+**Not modeled yet:** costs/selling prices (needs Quotation, Phase 10, and Finance, Phase 12 to mean
+anything) and structured services (Phase 6 — `requested_services_summary` is freeform text capturing
+what the customer originally asked for, "handling, fuel, permits...", exactly as the intake step
+describes it, until Phase 6 breaks that into real `Service` records with their own status/supplier/cost).
+
+**The dependent-select's filtering is a UI convenience, not the boundary — same principle as the
+`documents.download` check.** `aircraft_id`'s options are filtered to the selected customer's own
+fleet, but a submitted `aircraft_id` that doesn't actually belong to `customer_id` is rejected by an
+explicit closure rule on the field server-side (`FlightRequestResource::form()`), not trusted from the
+filtered list. Covered by a test that submits the mismatch directly, bypassing the UI filtering
+entirely.
+
+**Sales gained `flights.manage` in this phase** (previously view-only) — the original spec states
+requests are entered manually "by a sales or operations employee"; the Phase 1 seeder, written before
+Flight Request existed to check permissions against, only gave Operations the ability to create one.
+Fixed here, not silently — see the comment in `RolesAndPermissionsSeeder`. `customers.*` still has the
+same Operations/Management gap noted in Customers & Aircraft above; that one's still open.
+
+**A genuine Laravel factory bug, not application code:** `FlightRequestFactory` can't use
+`'customer_id' => Customer::factory()` / `'aircraft_id' => Aircraft::factory()` as lazy nested-factory
+values the way every other factory in this codebase does. Because `Aircraft`'s own factory *also*
+nests a `Customer::factory()`, having two co-dependent nested factories of the same related model in
+one `definition()` trips something in Laravel's factory relationship-recycling — `parentResolvers()`
+ends up with a `BelongsToRelationship` holding an empty relationship name and a null factory, and the
+empty-string method call blows up as `BadMethodCallException: Call to undefined method
+Illuminate\Database\Query\Builder::()`. Reproduced with a minimal anonymous `Factory` subclass outside
+the app's own classes, so it isn't a bug in `BelongsToCompany` or our models. The workaround:
+`FlightRequestFactory::definition()` creates the customer and a matching aircraft *eagerly* (real
+`->create()` calls, not lazy factory values), and `configure()`'s `afterMaking` re-points `aircraft_id`
+if a `->for($customer)` override afterward left the pair mismatched. If a future factory needs two
+nested factories of the same model, know this exists before spending an hour re-discovering it.
 
 ## What NOT to do
 

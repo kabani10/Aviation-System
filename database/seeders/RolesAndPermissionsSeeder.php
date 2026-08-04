@@ -23,7 +23,12 @@ class RolesAndPermissionsSeeder extends Seeder
             'customers.view', 'customers.manage',
             'quotations.view', 'quotations.manage',
             'communications.view', 'communications.manage',
-            'flights.view',
+            // flights.manage (not just .view) as of Phase 5: the original
+            // spec has requests entered manually "by a sales or operations
+            // employee" — Sales owns intake, Operations owns running the
+            // flight afterward. This was a gap in the original Phase 1
+            // seeder, written before Flight Request existed to check it against.
+            'flights.view', 'flights.manage',
         ],
         'Operations' => [
             'flights.view', 'flights.manage',

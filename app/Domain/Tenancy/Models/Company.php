@@ -5,6 +5,7 @@ namespace App\Domain\Tenancy\Models;
 use App\Domain\Communications\Concerns\HasCommunications;
 use App\Domain\Customers\Models\Customer;
 use App\Domain\Documents\Concerns\HasDocuments;
+use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\Suppliers\Models\Supplier;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -17,9 +18,10 @@ use Spatie\Activitylog\Support\LogOptions;
 /**
  * The tenant. Every other business record ultimately belongs to one Company
  * — see App\Domain\Shared\Concerns\BelongsToCompany. Also doubles as the
- * fallback subject for company-level documents/communications (an inbound
- * email that hasn't been matched to a flight yet, a business license) until
- * a more specific module (Customer, Flight, ...) exists to hold them.
+ * fallback subject for company-level documents/communications — an inbound
+ * email not yet matched to a flight (ReceiveInboundEmail can't do that
+ * matching without the AI extraction phases), a business license — that
+ * don't belong to any more specific record.
  */
 #[Fillable(['name', 'slug', 'billing_email', 'payment_terms'])]
 class Company extends Model
@@ -46,6 +48,11 @@ class Company extends Model
     public function suppliers(): HasMany
     {
         return $this->hasMany(Supplier::class);
+    }
+
+    public function flightRequests(): HasMany
+    {
+        return $this->hasMany(FlightRequest::class);
     }
 
     public function isSuspended(): bool

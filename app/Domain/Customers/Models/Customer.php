@@ -5,6 +5,7 @@ namespace App\Domain\Customers\Models;
 use App\Domain\Aircraft\Models\Aircraft;
 use App\Domain\Communications\Concerns\HasCommunications;
 use App\Domain\Documents\Concerns\HasDocuments;
+use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\Shared\Concerns\BelongsToCompany;
 use App\Domain\Suppliers\Models\Supplier;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -40,6 +41,11 @@ class Customer extends Model
     public function aircraft(): HasMany
     {
         return $this->hasMany(Aircraft::class);
+    }
+
+    public function flightRequests(): HasMany
+    {
+        return $this->hasMany(FlightRequest::class);
     }
 
     /** Closes the gap flagged in Phase 3 — needed Supplier (Phase 4) to be a real relationship. */
