@@ -7,6 +7,7 @@ use App\Domain\Communications\Concerns\HasCommunications;
 use App\Domain\Customers\Models\Customer;
 use App\Domain\Documents\Concerns\HasDocuments;
 use App\Domain\FlightRequests\Enums\FlightStatus;
+use App\Domain\FlightRequests\Enums\RequestSource;
 use App\Domain\ReferenceData\Models\Airport;
 use App\Domain\Services\Models\Service;
 use App\Domain\Shared\Concerns\BelongsToCompany;
@@ -33,6 +34,10 @@ use Spatie\Activitylog\Support\LogOptions;
     'customer_id', 'aircraft_id', 'callsign', 'origin_airport_id', 'destination_airport_id',
     'departure_at', 'arrival_at', 'passenger_count', 'crew_count', 'status',
     'special_instructions', 'requested_services_summary',
+    // source/extraction_metadata are set only by CreateFlightRequestFromExtraction,
+    // never a form — see the "mass-assignment protection is about forms,
+    // not about hiding a field from your own Actions" note in ARCHITECTURE.md.
+    'source', 'reviewed_at', 'extraction_metadata',
 ])]
 class FlightRequest extends Model
 {
@@ -42,8 +47,11 @@ class FlightRequest extends Model
     {
         return [
             'status' => FlightStatus::class,
+            'source' => RequestSource::class,
             'departure_at' => 'datetime',
             'arrival_at' => 'datetime',
+            'reviewed_at' => 'datetime',
+            'extraction_metadata' => 'array',
         ];
     }
 
@@ -82,6 +90,12 @@ class FlightRequest extends Model
         $route = "{$this->originAirport->icao_code}-{$this->destinationAirport->icao_code}";
 
         return $this->callsign ? "{$this->callsign} ({$route})" : $route;
+    }
+
+    /** True only for an AI-drafted request an operator hasn't confirmed or corrected yet. */
+    public function needsReview(): bool
+    {
+        return $this->source === RequestSource::Email && $this->reviewed_at === null;
     }
 
     public function getActivitylogOptions(): LogOptions

@@ -18,6 +18,11 @@ app/
     Recommenders/         e.g. SupplierRecommender
     Prompts/               Prompt templates, kept out of the calling code so they're reviewable on their own
     Jobs/                   Queued jobs that call the Claude API and act on the result
+    Actions/                Post-processing that turns a Claude response into domain records —
+                             doesn't call the API itself, kept in AI/ because it's specific to
+                             that capability's workflow (e.g. CreateFlightRequestFromExtraction)
+  AI/Support/              Cross-capability plumbing with no domain meaning of its own — today,
+                             just ClaudeClient, the one place that knows the Messages API's HTTP shape
 
   Filament/Resources/<Module>/   Admin UI, grouped to match Domain
   Http/Middleware/                 Cross-cutting request concerns (tenancy, etc.)
@@ -327,6 +332,88 @@ the table, to every resource with nested `RelationManager`s where a view-only ro
 managers (`AircraftResource`, `UserResource`) don't need one — the list/edit pages are the whole story
 there. Give any *future* resource with relation managers a `ViewRecord` page from the start rather than
 waiting to rediscover this.
+
+## AI request extraction
+
+The first phase that actually calls the Claude API — the spec's "AI Request Extraction" and
+"AI Missing-Information Detection" features. Only one of those two turned out to need an LLM;
+see the missing-information note below for why the other is plain domain code.
+
+**`App\AI\Support\ClaudeClient`** is the only class in the codebase that knows the Messages API's
+HTTP shape — a thin wrapper over `Http::post()`, bound as a singleton in `AppServiceProvider` from
+`config('services.anthropic.*')` (`ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL`, default `claude-opus-5`).
+Everything else calls through it, per the "don't call the Claude API directly" rule below. It's
+mocked in tests via `Http::fake(['api.anthropic.com/*' => ...])`, not by faking the client itself,
+so a test failure that's really an HTTP-shape mismatch shows up as one.
+
+**Deliberately not forcing `tool_choice`.** The obvious way to get structured output from a tool-use
+call is `tool_choice: {type: "tool", name: "..."}`, but Claude Opus 5 has thinking on by default, and
+disabling thinking to safely combine with a forced tool can make the model write the tool call into
+plain text instead of an actual `tool_use` block — exactly the failure mode a structured-extraction
+caller can't tolerate. `ClaudeClient::messages()` leaves `tool_choice` on the default `auto`, offers
+exactly one tool, and instructs the system prompt to always call it; `RequestExtractor` treats a
+missing `tool_use` block as a `ClaudeApiException`, not something to unwrap and hope for.
+
+**`App\AI\RequestExtraction`** is the one capability here so far:
+
+- **`RequestExtractionPrompt`** builds the system prompt, the `extract_flight_request` tool schema,
+  and the user content — the inbound email plus the tenant's own customers and their aircraft
+  (id, name, billing email, registration), so Claude matches the sender against real records and
+  returns actual database ids rather than names for the app to fuzzy-match afterward. Capped at 200
+  customers serialized per call; revisit if a tenant's customer list grows past that.
+- **`RequestExtractor`** calls `ClaudeClient` and turns the tool's `input` into an
+  `ExtractedFlightRequest` DTO. Airport fields stay as ICAO/IATA code *strings* here — resolving a
+  code to an `Airport` row is a deterministic lookup, not something worth asking the model to do.
+- **`ExtractFlightRequestFromEmail`** (a queued job) sets `CurrentCompany` explicitly (same convention
+  as every other job — see Multi-tenancy above), calls the extractor, and hands the result to
+  `CreateFlightRequestFromExtraction`. A `ClaudeApiException` — no API key configured, Claude declined,
+  a network error — is logged and swallowed: the inbound Communication still exists either way, it
+  just doesn't become a draft automatically. This is also why `ANTHROPIC_API_KEY` being blank (the
+  `.env.example`/CI default) doesn't break anything — extraction silently no-ops instead of failing
+  the request that logged the email in the first place.
+- **`CreateFlightRequestFromExtraction`** is the confidence gate. `flight_requests` has NOT NULL
+  columns for customer/aircraft/both airports/departure/arrival, so a partial extraction can't become
+  a partial `FlightRequest` the way the spec's "AI draft" language might suggest. It's confident only
+  when the customer and aircraft both resolved to real rows (aircraft belonging to that customer),
+  both airport codes matched a real `Airport`, and departure/arrival both parsed with arrival after
+  departure. When confident: creates the `FlightRequest` (`source: Email`, `reviewed_at: null`,
+  `extraction_metadata` holding the raw tool input for later "why did it fill this in this way"
+  debugging) and **moves the Communication onto it** — `communicable_type`/`communicable_id` aren't in
+  `Communication`'s `#[Fillable]` list, so this is a direct property assignment + `save()`, not
+  `update()`. This is the "matching an email to the right flight" step that the Documents &
+  communications section above flagged as blocked until this phase existed. When not confident: the
+  raw extraction is stashed on the Communication's own `metadata['ai_extraction']` instead, and the
+  Communication stays exactly where `ReceiveInboundEmail` put it (on the `Company`) — there's no
+  review-queue UI for these yet, an operator has to know to look at the Communication's metadata.
+  Worth building once this is actually used enough for that to be a real friction point, not before.
+
+**`RequestSource` and `needsReview()`.** `FlightRequest.source` is `manual` (the DB default, every
+existing creation path) or `email`. `needsReview(): bool` is `source === Email && reviewed_at === null`
+— this is the spec's Step 3 ("operator reviews the AI draft... approves or corrects"), not a new
+`FlightStatus`; an AI draft is a perfectly normal `NewRequest` that additionally needs a human to look
+at it once. The Filament table shows a warning badge ("AI draft — needs review") in place of the
+normal source label while that's true, and both `ViewFlightRequest`/`EditFlightRequest` (via the
+shared `HasAiReviewActions` trait — Filament resource pages don't share a common ancestor worth
+putting this on instead) expose a "Mark AI draft reviewed" header action that only appears while
+`needsReview()` is true.
+
+**`App\Domain\FlightRequests\Actions\CheckMissingInformation` is plain domain code, not `AI/*`** —
+a deliberate scope call, not an oversight. Every check the spec asks for (missing passenger/crew
+count, no customer billing email, an expired aircraft document, a landing/overflight permit service
+with no supporting documents, a service with no supplier assigned) is a deterministic lookup with no
+ambiguity for an LLM to resolve. `app/AI` exists to isolate a specific failure mode — a Claude API
+call can fail, time out, or return something to validate — and there's no such failure mode here, so
+routing it through `AI/*` would just be following the spec's feature *name* instead of what the
+feature actually *needs*. It's exposed as a "Missing information" header action (same trait, opens a
+modal listing findings) rather than computed once and stored, since the answer changes as an operator
+fills in gaps — a stored result would go stale the moment someone adds a passenger count.
+
+**Not modeled:** the spec's "insufficient time to obtain a permit" check. That needs a per-country
+permit lead-time model that doesn't exist yet — Suppliers & reference data already deferred
+permit-specific rules for the same reason; this is the same gap surfacing again, not a new one. Also
+not built: a `services_count`-style live "completeness" column on the flight-request list — computing
+`CheckMissingInformation` per row for every row in a list is a real cost that isn't worth taking until
+list sizes actually make it matter; the header action covers "check this one flight" for now.
 
 ## What NOT to do
 

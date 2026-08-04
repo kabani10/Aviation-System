@@ -154,6 +154,10 @@ class FlightRequestResource extends Resource
                     ->badge()
                     ->formatStateUsing(fn (FlightStatus $state): string => $state->label())
                     ->color(fn (FlightStatus $state): string => $state->color()),
+                TextColumn::make('source')
+                    ->badge()
+                    ->formatStateUsing(fn (FlightRequest $record): string => $record->needsReview() ? 'AI draft — needs review' : $record->source->label())
+                    ->color(fn (FlightRequest $record): string => $record->needsReview() ? 'warning' : 'gray'),
                 TextColumn::make('assignedUsers.name')->label('Assigned to')->listWithLineBreaks()->limitList(2),
                 TextColumn::make('services_count')->label('Services')->counts('services'),
             ])

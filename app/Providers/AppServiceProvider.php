@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\AI\Support\ClaudeClient;
 use App\Domain\Aircraft\Models\Aircraft;
 use App\Domain\Aircraft\Policies\AircraftPolicy;
 use App\Domain\Customers\Models\Customer;
@@ -32,6 +33,11 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(CurrentCompany::class);
+
+        $this->app->singleton(ClaudeClient::class, fn () => new ClaudeClient(
+            apiKey: config('services.anthropic.key'),
+            model: config('services.anthropic.model'),
+        ));
     }
 
     /**

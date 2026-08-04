@@ -2,6 +2,7 @@
 
 namespace App\Domain\Communications\Actions;
 
+use App\AI\RequestExtraction\Jobs\ExtractFlightRequestFromEmail;
 use App\Domain\Communications\Enums\CommunicationType;
 use App\Domain\Communications\Models\Communication;
 use App\Domain\Documents\Actions\UploadDocument;
@@ -13,10 +14,11 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Turns a Postmark inbound-parse payload into a Communication (and a
- * Document per attachment). Not matched to a flight/customer here — that
- * matching needs modules that don't exist yet (Flight Request, AI
- * extraction). Until then every inbound email lands on the Company itself,
- * visible in the company-wide Communications list.
+ * Document per attachment), then hands off to AI request extraction
+ * (ExtractFlightRequestFromEmail) to try to turn it into a draft
+ * FlightRequest. Every inbound email still lands on the Company first —
+ * extraction runs on the queue and, when confident, moves the Communication
+ * onto the FlightRequest it created; see CreateFlightRequestFromExtraction.
  */
 class ReceiveInboundEmail
 {
@@ -44,6 +46,8 @@ class ReceiveInboundEmail
         foreach ($payload['Attachments'] ?? [] as $attachment) {
             $this->storeAttachment($communication, $attachment);
         }
+
+        ExtractFlightRequestFromEmail::dispatch($communication);
 
         return $communication;
     }

@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\FlightRequests\FlightRequestResource\Pages;
 
 use App\Filament\Resources\FlightRequests\FlightRequestResource;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\Concerns\HasAiReviewActions;
 use Filament\Resources\Pages\ViewRecord;
 
 /**
@@ -14,5 +15,15 @@ use Filament\Resources\Pages\ViewRecord;
  */
 class ViewFlightRequest extends ViewRecord
 {
+    use HasAiReviewActions;
+
     protected static string $resource = FlightRequestResource::class;
+
+    protected function getHeaderActions(): array
+    {
+        return [
+            ...parent::getHeaderActions(),
+            ...$this->aiReviewHeaderActions(),
+        ];
+    }
 }
