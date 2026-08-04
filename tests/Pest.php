@@ -2,6 +2,7 @@
 
 use App\Domain\Tenancy\Models\Company;
 use App\Models\User;
+use Database\Seeders\ReferenceDataSeeder;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -19,9 +20,13 @@ use Tests\TestCase;
 
 pest()->extend(TestCase::class)
     ->use(RefreshDatabase::class)
-    // Roles/permissions are the same for every tenant (see RolesAndPermissionsSeeder),
-    // so every Feature test gets them for free instead of re-seeding per test.
-    ->beforeEach(fn () => $this->seed(RolesAndPermissionsSeeder::class))
+    // Roles/permissions and reference data (countries/airports) are the same
+    // for every tenant, so every Feature test gets them for free instead of
+    // re-seeding per test.
+    ->beforeEach(function () {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $this->seed(ReferenceDataSeeder::class);
+    })
     ->in('Feature');
 
 /*
@@ -67,8 +72,14 @@ function adminFor(Company $company): User
 /** A Sales user for $company — doesn't need the 2FA dance, only Admin is required to have it. */
 function salesUserFor(Company $company): User
 {
+    return userWithRoleFor($company, 'Sales');
+}
+
+/** Any non-Admin role for $company — none of the other five need 2FA confirmed. */
+function userWithRoleFor(Company $company, string $role): User
+{
     $user = User::factory()->for($company)->create();
-    $user->assignRole('Sales');
+    $user->assignRole($role);
 
     return $user;
 }

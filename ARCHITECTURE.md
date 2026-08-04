@@ -193,9 +193,41 @@ no permission to view customer records at all under the current seeder, which wi
 Request needs to show operators the customer behind a flight — worth revisiting when that module is
 built, not fixed unilaterally here.
 
-**Deliberately not modeled yet:** the original spec's "preferred suppliers" per customer. It needs the
-Supplier module (Phase 4) to be a real relationship; a placeholder field now would just get thrown away
-and rebuilt, which is the "half-finished implementation" this project's conventions explicitly avoid.
+`Customer::preferredSuppliers()` (`customer_preferred_supplier` pivot) closes the gap flagged when this
+section was written in Phase 3 — see Suppliers below.
+
+## Suppliers & reference data
+
+**`Country` and `Airport`** (`app/Domain/ReferenceData`) are shared across every tenant — deliberately
+*not* `BelongsToCompany`. There's no Filament resource for either in the tenant panel: since they're
+genuinely global, giving any tenant's Admin a CRUD screen for them would let one company's edits corrupt
+what every other tenant reads. They're seeder-managed (`ReferenceDataSeeder`, a starting set of major
+business-aviation hubs, not an exhaustive import — extend the list as real usage needs airports it's
+missing) and exposed read-only wherever a picker is needed (`Supplier`'s "airports covered"). If a
+platform-operator admin panel is ever built, that's where Country/Airport CRUD belongs — not here.
+
+**`App\Domain\Suppliers\Models\Supplier`** — a vendor the tenant works with (ground handling, fuel,
+permits, ...), same shape as `Customer`: its own contacts (`SupplierContact` via `ContactsRelationManager`),
+`HasDocuments` (certificates), `HasCommunications`. Two fields worth knowing the reasoning on:
+
+- **`services_offered`** — a JSON array of `App\Domain\Shared\Enums\ServiceType` values, not a pivot
+  table. The vocabulary (ground handling, fuel, landing permit, ...) is fixed and has no attributes of
+  its own, so tagging is simpler than a join. `ServiceType` itself lives in `Domain/Shared` rather than
+  under Suppliers because Phase 6's Service Management needs the exact same vocabulary for what a
+  flight request needs — defining it once now avoids two competing lists later.
+- **`airports`** — a real `BelongsToMany` to `Airport`, unlike `services_offered`, because Airport is an
+  actual entity (ICAO/IATA codes, country) worth joining to rather than tagging.
+
+**Not modeled, deliberately:** "average response time", "previous prices", and "service quality" from
+the original spec. These are computed from real supplier interactions (quotes sent, confirmations
+received) that don't exist until Service Management (Phase 6) — a static rating field today would be a
+number nobody updates. `notes` (freeform) covers "previous operational problems" in the meantime, since
+that's genuinely just something procurement writes down, not something derived from data.
+
+`SupplierPolicy` / `SupplierContactPolicy` consume `suppliers.view` / `suppliers.manage` — permissions
+that already existed in `RolesAndPermissionsSeeder` since Phase 1 (Operations and Management view-only,
+Procurement both); this is the first module to actually use them, same permission-over-role pattern as
+`CustomerPolicy`.
 
 ## What NOT to do
 

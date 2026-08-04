@@ -8,6 +8,7 @@ use App\Filament\RelationManagers\DocumentsRelationManager;
 use App\Filament\Resources\Customers\CustomerResource\Pages;
 use App\Filament\Resources\Customers\CustomerResource\RelationManagers\AircraftRelationManager;
 use App\Filament\Resources\Customers\CustomerResource\RelationManagers\ContactsRelationManager;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
@@ -48,6 +49,14 @@ class CustomerResource extends Resource
             Textarea::make('special_instructions')
                 ->rows(3)
                 ->helperText('Standing instructions operators should see every time this customer\'s flights come up.'),
+
+            Select::make('preferredSuppliers')
+                ->label('Preferred suppliers')
+                ->relationship('preferredSuppliers', 'name')
+                ->multiple()
+                ->searchable()
+                ->preload()
+                ->helperText('Suppliers this customer has asked for by name, or that procurement should default to.'),
 
             Toggle::make('is_active')
                 ->label('Active')
