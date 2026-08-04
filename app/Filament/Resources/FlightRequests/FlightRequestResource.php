@@ -8,6 +8,7 @@ use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Filament\RelationManagers\CommunicationsRelationManager;
 use App\Filament\RelationManagers\DocumentsRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\ServicesRelationManager;
 use Closure;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Select;
@@ -16,6 +17,8 @@ use Filament\Forms\Components\TextInput;
 use Filament\Forms\Form;
 use Filament\Forms\Get;
 use Filament\Resources\Resource;
+use Filament\Tables\Actions\EditAction;
+use Filament\Tables\Actions\ViewAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
@@ -152,17 +155,23 @@ class FlightRequestResource extends Resource
                     ->formatStateUsing(fn (FlightStatus $state): string => $state->label())
                     ->color(fn (FlightStatus $state): string => $state->color()),
                 TextColumn::make('assignedUsers.name')->label('Assigned to')->listWithLineBreaks()->limitList(2),
+                TextColumn::make('services_count')->label('Services')->counts('services'),
             ])
             ->defaultSort('departure_at', 'desc')
             ->filters([
                 SelectFilter::make('status')
                     ->options(collect(FlightStatus::cases())->mapWithKeys(fn ($case) => [$case->value => $case->label()])),
+            ])
+            ->actions([
+                ViewAction::make(),
+                EditAction::make(),
             ]);
     }
 
     public static function getRelations(): array
     {
         return [
+            ServicesRelationManager::class,
             DocumentsRelationManager::class,
             CommunicationsRelationManager::class,
         ];
@@ -173,6 +182,7 @@ class FlightRequestResource extends Resource
         return [
             'index' => Pages\ListFlightRequests::route('/'),
             'create' => Pages\CreateFlightRequest::route('/create'),
+            'view' => Pages\ViewFlightRequest::route('/{record}'),
             'edit' => Pages\EditFlightRequest::route('/{record}/edit'),
         ];
     }

@@ -29,6 +29,13 @@ class RolesAndPermissionsSeeder extends Seeder
             // flight afterward. This was a gap in the original Phase 1
             // seeder, written before Flight Request existed to check it against.
             'flights.view', 'flights.manage',
+            // services.view + finance.view_prices as of Phase 6: the spec
+            // says "Sales may see selling prices but not necessarily all
+            // supplier costs" — deliberately no finance.view_costs here.
+            // Selling price lives on the Service record, so view access to
+            // services is what actually makes that visible; without it the
+            // price grant has nothing to attach to.
+            'services.view', 'finance.view_prices',
         ],
         'Operations' => [
             'flights.view', 'flights.manage',
@@ -47,6 +54,13 @@ class RolesAndPermissionsSeeder extends Seeder
             'finance.view_costs', 'finance.view_prices', 'finance.manage',
             'quotations.view',
             'flights.view',
+            // services.view as of Phase 6: Finance's whole job per the spec
+            // is "supplier costs, profitability, financial reports" — costs
+            // live on the Service record (ServicesRelationManager), so
+            // without this Finance could hold finance.view_costs and still
+            // have no screen that shows a cost. Same class of gap as the
+            // Sales fixes above.
+            'services.view',
         ],
         'Management' => [
             'flights.view',

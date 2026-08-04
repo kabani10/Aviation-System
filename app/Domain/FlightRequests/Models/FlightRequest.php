@@ -8,6 +8,7 @@ use App\Domain\Customers\Models\Customer;
 use App\Domain\Documents\Concerns\HasDocuments;
 use App\Domain\FlightRequests\Enums\FlightStatus;
 use App\Domain\ReferenceData\Models\Airport;
+use App\Domain\Services\Models\Service;
 use App\Domain\Shared\Concerns\BelongsToCompany;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -15,16 +16,18 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Spatie\Activitylog\Models\Concerns\LogsActivity;
 use Spatie\Activitylog\Support\LogOptions;
 
 /**
  * The central record — everyone working an operation opens this one page.
- * Costs/selling prices from the original spec aren't here yet: they need
- * Quotation (Phase 10) and Finance (Phase 12) to mean anything. Requested
- * services are captured as freeform text for now
- * (requested_services_summary) — structured Service records with their own
- * status/supplier/cost per service are Phase 6.
+ * Costs/selling prices at the flight level aren't here yet: aggregate
+ * flight profitability needs Quotation (Phase 10) and Finance (Phase 12).
+ * Per-service cost/selling price exist as of Phase 6 (see Service) —
+ * `requested_services_summary` stays as the freeform original ask
+ * ("handling, fuel, permits...") even after it's broken into real Service
+ * records, since it's the customer's own words, not something to overwrite.
  */
 #[Fillable([
     'customer_id', 'aircraft_id', 'callsign', 'origin_airport_id', 'destination_airport_id',
@@ -67,6 +70,11 @@ class FlightRequest extends Model
     public function assignedUsers(): BelongsToMany
     {
         return $this->belongsToMany(User::class);
+    }
+
+    public function services(): HasMany
+    {
+        return $this->hasMany(Service::class);
     }
 
     public function displayLabel(): string

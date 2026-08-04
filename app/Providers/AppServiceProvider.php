@@ -10,6 +10,8 @@ use App\Domain\Customers\Policies\CustomerContactPolicy;
 use App\Domain\Customers\Policies\CustomerPolicy;
 use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\FlightRequests\Policies\FlightRequestPolicy;
+use App\Domain\Services\Models\Service;
+use App\Domain\Services\Policies\ServicePolicy;
 use App\Domain\Suppliers\Models\Supplier;
 use App\Domain\Suppliers\Models\SupplierContact;
 use App\Domain\Suppliers\Policies\SupplierContactPolicy;
@@ -46,6 +48,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Supplier::class, SupplierPolicy::class);
         Gate::policy(SupplierContact::class, SupplierContactPolicy::class);
         Gate::policy(FlightRequest::class, FlightRequestPolicy::class);
+        Gate::policy(Service::class, ServicePolicy::class);
 
         // Defends against session fixation: without this, a session cookie
         // planted before login (with 2fa_passed already true) would let an

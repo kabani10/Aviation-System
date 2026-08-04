@@ -240,10 +240,10 @@ were built for. `FlightStatus` mirrors the spec's Step 11 lifecycle with one add
 which the spec covers for individual services but never states for the flight itself — an omission,
 not a deliberate scope line, so it's included.
 
-**Not modeled yet:** costs/selling prices (needs Quotation, Phase 10, and Finance, Phase 12 to mean
-anything) and structured services (Phase 6 — `requested_services_summary` is freeform text capturing
-what the customer originally asked for, "handling, fuel, permits...", exactly as the intake step
-describes it, until Phase 6 breaks that into real `Service` records with their own status/supplier/cost).
+**Not modeled yet:** flight-level costs/selling prices (needs Quotation, Phase 10, and Finance, Phase
+12, to aggregate profitability across services). Per-service cost/selling price exist as of Phase 6 —
+see Service Management below. `requested_services_summary` stays even after a flight has real `Service`
+records: it's the customer's original ask in their own words, not something structured data replaces.
 
 **The dependent-select's filtering is a UI convenience, not the boundary — same principle as the
 `documents.download` check.** `aircraft_id`'s options are filtered to the selected customer's own
@@ -271,6 +271,62 @@ the app's own classes, so it isn't a bug in `BelongsToCompany` or our models. Th
 `->create()` calls, not lazy factory values), and `configure()`'s `afterMaking` re-points `aircraft_id`
 if a `->for($customer)` override afterward left the pair mismatched. If a future factory needs two
 nested factories of the same model, know this exists before spending an hour re-discovering it.
+
+## Service Management
+
+`App\Domain\Services\Models\Service` — one line item on a flight (ground handling, fuel, a landing
+permit), `belongsTo FlightRequest`, `BelongsToCompany` directly (same "a join isn't what CompanyScope
+filters on" reasoning as everywhere else). No standalone `ServiceResource`: unlike Documents/
+Communications, there's no real "browse every service across every flight" use case in the spec —
+services only make sense in the context of the flight they're on, so `ServicesRelationManager` nested
+under `FlightRequestResource` is the only UI. `ServiceStatus` mirrors the same Step 11 source as
+`FlightStatus`; `ServiceType` is the enum already built in Phase 4 for `Supplier.services_offered` —
+same vocabulary, one definition.
+
+**`cost` / `selling_price` are real fields now, not deferred like flight-level pricing** — the original
+spec lists them as core per-service attributes, and without them "know whether a flight is profitable"
+(the spec's stated value prop) is meaningless. `profitMargin()` is computed from the two on read, never
+stored — a third column would just be a copy that can drift.
+
+**Field-level permission gating, not just screen-level.** The spec draws the line at the field, not the
+page: *"Sales may see selling prices but not necessarily all supplier costs."* `cost` and
+`selling_price` each check `finance.view_costs` / `finance.view_prices` independently via both
+`->visible()` **and** `->dehydrated()` on the form fields, and `->visible()` on the table columns. The
+`dehydrated()` half is the part that's easy to skip and dangerous to: a merely-hidden field can still
+submit its last-known value (or `null`) with the rest of the form, so a non-Finance user saving an
+unrelated field (say, `notes`) could otherwise silently wipe an existing cost. Test this pattern by
+forcing the gated value into `fillForm()`/`callTableAction()` data directly and asserting the database
+row is unaffected — asserting the field merely "looks hidden" doesn't catch a dehydration bug.
+
+**Two more spec-supported permission fixes, same reasoning as Sales/`flights.manage` in Phase 5:**
+Sales gained `services.view` (selling price lives on `Service`, so price visibility needs a screen to
+attach to) and Finance gained `services.view` (its whole job per the spec — "supplier costs,
+profitability" — otherwise had nowhere to read a cost from despite holding `finance.view_costs`). Both
+documented inline in `RolesAndPermissionsSeeder`.
+
+**Supplier filtering is a shortlist, not a rule.** `supplier_id`'s options narrow to suppliers whose
+`services_offered` contains the selected `type` (`whereJsonContains`), but nothing stops picking a
+supplier outside that list — unlike `aircraft_id`/`customer_id` in Flight Requests, a service using an
+"unlisted" supplier isn't invalid data, just unusual, so there's no server-side rule enforcing it.
+
+**Not modeled:** "operational risks" from the spec. That's AI Risk Detection reading deadlines,
+confirmations, and supplier responses across services — not a field an operator fills in by hand.
+`HasDocuments` is on the model (a service's own permit/certificate belongs here, not on the flight),
+but there's no dedicated document UI for it yet: Filament doesn't nest a `RelationManager` inside
+another `RelationManager`, and `Service` has no top-level resource of its own to hang one off.
+
+**A `ViewRecord` page is required wherever view-only roles need to reach a `RelationManager`, not just
+`ListRecords`/`EditRecord`.** Filament's `EditRecord` page requires *update* rights by default — a role
+with only `flights.view` (Procurement, Finance, Management) couldn't open a flight request at all before
+this phase, since the only "detail" route was `/edit`. That silently blocked those roles from
+`ServicesRelationManager`/`DocumentsRelationManager`/`CommunicationsRelationManager` too — discovered
+via a Service test that actually exercised a view-only role, not something visible from the code. Fixed
+by adding a `ViewRecord` page (gated on the `view` policy ability, not `update`) plus a `ViewAction` in
+the table, to every resource with nested `RelationManager`s where a view-only role exists:
+`FlightRequestResource`, `SupplierResource`, `CustomerResource`. Resources without child relation
+managers (`AircraftResource`, `UserResource`) don't need one — the list/edit pages are the whole story
+there. Give any *future* resource with relation managers a `ViewRecord` page from the start rather than
+waiting to rediscover this.
 
 ## What NOT to do
 
