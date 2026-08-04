@@ -25,8 +25,19 @@ class EditUser extends EditRecord
     protected function handleRecordUpdate(Model $record, array $data): Model
     {
         /** @var User $record */
-        $record->syncRoles([$data['role']]);
+        $previousRole = $record->roles->first()?->name;
+        $newRole = $data['role'];
         unset($data['role']);
+
+        if ($newRole !== $previousRole) {
+            $record->syncRoles([$newRole]);
+
+            activity()
+                ->causedBy(auth()->user())
+                ->performedOn($record)
+                ->withProperties(['from' => $previousRole, 'to' => $newRole])
+                ->log('role_changed');
+        }
 
         $record->fill($data);
         $record->save();

@@ -5,6 +5,8 @@ namespace App\Providers;
 use App\Domain\Tenancy\Policies\UserPolicy;
 use App\Models\User;
 use App\Support\Tenancy\CurrentCompany;
+use Illuminate\Auth\Events\Login;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 
@@ -26,5 +28,10 @@ class AppServiceProvider extends ServiceProvider
         Gate::before(fn (User $user) => $user->hasRole('Admin') ? true : null);
 
         Gate::policy(User::class, UserPolicy::class);
+
+        // Defends against session fixation: without this, a session cookie
+        // planted before login (with 2fa_passed already true) would let an
+        // attacker skip the 2FA challenge for whoever logs in on it.
+        Event::listen(Login::class, fn () => session()->forget('2fa_passed'));
     }
 }

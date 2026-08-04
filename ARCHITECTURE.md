@@ -78,6 +78,47 @@ mean something within their own tenant): Admin, Sales, Operations, Procurement, 
 Permission definitions live in `database/seeders/RolesAndPermissionsSeeder.php` — that seeder is the
 source of truth for what each role can do, not scattered `can()` checks invented ad hoc in resources.
 
+## Two-factor authentication
+
+TOTP (`pragmarx/google2fa` + `bacon/bacon-qr-code` for the QR image, rendered as inline SVG — no
+external network call). Enforced for the **Admin** role specifically, not optional-everywhere: Admin
+bypasses every permission check (`Gate::before` in `AppServiceProvider`), so it's the one role with no
+lesser-privileged fallback if the account is compromised.
+
+Two middleware, both in `AdminPanelProvider`'s `authMiddleware`, in this order:
+
+1. **`RequireTwoFactorForAdmins`** — an Admin with no confirmed 2FA is redirected to the setup page
+   (`App\Filament\Pages\TwoFactorAuthentication`) before reaching anything else in the panel.
+2. **`EnsureTwoFactorChallengeCompleted`** — anyone with 2FA enabled must pass a post-login code
+   challenge (`/two-factor-challenge`, outside the panel) once per session before proceeding.
+   Filament's `Login` page calls `Auth::attempt()` directly (full session established immediately) —
+   there's no "authenticated but not yet 2FA-cleared" state to hook into upstream, so this is
+   enforced downstream instead, gated on `session('2fa_passed')`.
+
+That session key is cleared on every `Illuminate\Auth\Events\Login` (see `AppServiceProvider`) —
+without that, a session cookie planted before login (session fixation) would carry a stale
+`2fa_passed = true` forward and let an attacker skip the challenge for whoever logs in on it.
+
+Recovery codes are consumed on use (removed from the stored array), and 2FA state changes
+(enabled/disabled/recovery code used) are written to the activity log explicitly — see below.
+
+## Audit logging
+
+`spatie/laravel-activitylog`, applied per-model via the `LogsActivity` trait — not on by default,
+add it deliberately when a model holds data worth an audit trail (so far: `Company`, `User`).
+Two things to know about this package version specifically, since its docs/examples online often
+describe an older API:
+
+- Automatic before/after diffs land in `attribute_changes` (a real column), **not** `properties`.
+  `properties` is for whatever you explicitly pass via `withProperties()`.
+- `getActivitylogOptions()` always specifies `logOnly([...])` with an explicit attribute list, never
+  `logAll()` — this is what keeps `password` and `two_factor_secret` out of the log. If a model has
+  any sensitive field, it must be absent from that list, not merely hidden from `toArray()`.
+
+State transitions that aren't plain attribute diffs (role assigned/changed, 2FA enabled/disabled,
+recovery code used, employee invited) are logged explicitly with `activity()->performedOn(...)->log(...)`
+at the point they happen — see `app/Domain/Tenancy/Actions`.
+
 ## Documents & communications
 
 Both are polymorphic and cross-cutting — almost every module attaches to them:

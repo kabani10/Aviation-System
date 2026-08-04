@@ -23,13 +23,13 @@ it('cannot see another company\'s employees through the admin panel', function (
     $companyA = Company::factory()->create();
     $companyB = Company::factory()->create();
 
-    $adminA = User::factory()->for($companyA)->create();
+    $adminA = User::factory()->for($companyA)->withTwoFactorConfirmed()->create();
     $adminA->assignRole('Admin');
 
     $employeeB = User::factory()->for($companyB)->create(['name' => 'Employee Of Company B']);
     $employeeB->assignRole('Operations');
 
-    $response = $this->actingAs($adminA)->get('/admin/tenancy/users');
+    $response = $this->withSession(['2fa_passed' => true])->actingAs($adminA)->get('/admin/tenancy/users');
 
     $response->assertOk();
     $response->assertDontSee('Employee Of Company B');

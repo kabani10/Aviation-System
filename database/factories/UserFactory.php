@@ -7,6 +7,7 @@ use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use PragmaRX\Google2FA\Google2FA;
 
 /**
  * @extends Factory<User>
@@ -43,6 +44,19 @@ class UserFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'email_verified_at' => null,
+        ]);
+    }
+
+    /**
+     * Bypasses RequireTwoFactorForAdmins for tests that aren't about 2FA
+     * itself — an Admin with unconfirmed 2FA gets redirected to setup
+     * before reaching anything else in the panel.
+     */
+    public function withTwoFactorConfirmed(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'two_factor_secret' => app(Google2FA::class)->generateSecretKey(),
+            'two_factor_confirmed_at' => now(),
         ]);
     }
 }

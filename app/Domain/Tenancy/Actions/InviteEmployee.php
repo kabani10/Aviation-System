@@ -30,6 +30,12 @@ class InviteEmployee
 
         $user->assignRole($role);
 
+        activity()
+            ->causedBy(auth()->user())
+            ->performedOn($user)
+            ->withProperties(['role' => $role])
+            ->log('employee_invited');
+
         $status = Password::sendResetLink(['email' => $user->email]);
 
         if ($status !== PasswordBroker::RESET_LINK_SENT) {
