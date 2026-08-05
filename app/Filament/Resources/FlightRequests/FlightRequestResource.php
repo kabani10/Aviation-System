@@ -8,6 +8,7 @@ use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Filament\RelationManagers\CommunicationsRelationManager;
 use App\Filament\RelationManagers\DocumentsRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\InvoicesRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\QuotationsRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\ServicesRelationManager;
 use Closure;
@@ -178,6 +179,7 @@ class FlightRequestResource extends Resource
         return [
             ServicesRelationManager::class,
             QuotationsRelationManager::class,
+            InvoicesRelationManager::class,
             DocumentsRelationManager::class,
             CommunicationsRelationManager::class,
         ];

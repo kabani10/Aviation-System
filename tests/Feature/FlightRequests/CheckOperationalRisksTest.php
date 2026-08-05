@@ -1,5 +1,7 @@
 <?php
 
+use App\Domain\Finance\Enums\InvoiceStatus;
+use App\Domain\Finance\Models\Invoice;
 use App\Domain\FlightRequests\Actions\CheckOperationalRisks;
 use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\Quotations\Enums\QuotationStatus;
@@ -138,6 +140,40 @@ it('does not flag an expired-by-date quotation that was already accepted', funct
     Quotation::factory()->for($flightRequest)->create([
         'status' => QuotationStatus::Accepted,
         'valid_until' => now()->subDay(),
+    ]);
+
+    $findings = app(CheckOperationalRisks::class)($flightRequest);
+
+    expect($findings)->toBeEmpty();
+});
+
+it('flags a sent invoice that has passed its due date with no payment', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    $quotation = Quotation::factory()->for($flightRequest)->create(['status' => QuotationStatus::Accepted]);
+    $invoice = Invoice::factory()->for($flightRequest)->create([
+        'quotation_id' => $quotation->id,
+        'status' => InvoiceStatus::Sent,
+        'due_date' => now()->subDay(),
+    ]);
+
+    $findings = app(CheckOperationalRisks::class)($flightRequest);
+
+    expect($findings->pluck('field'))->toContain("invoices.{$invoice->id}.due_date");
+});
+
+it('does not flag a paid invoice no matter how old its due date', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    $quotation = Quotation::factory()->for($flightRequest)->create(['status' => QuotationStatus::Accepted]);
+    Invoice::factory()->for($flightRequest)->create([
+        'quotation_id' => $quotation->id,
+        'status' => InvoiceStatus::Paid,
+        'due_date' => now()->subMonth(),
     ]);
 
     $findings = app(CheckOperationalRisks::class)($flightRequest);

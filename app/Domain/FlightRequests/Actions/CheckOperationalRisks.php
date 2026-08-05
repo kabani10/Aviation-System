@@ -12,11 +12,11 @@ use Illuminate\Support\Collection;
  * implemented as plain deterministic domain code rather than an AI/* class.
  * Everything checked here (a flagged status, a passed deadline, a stale
  * quote request, a tight deadline with no confirmed supplier, an expired
- * quotation) is a direct comparison against data Phases 6/8/10 already
- * produce. The genuinely judgment-based part of "should we worry about
- * this supplier" — reading their notes for red flags — lives in
- * SupplierRecommender instead, where it's actually useful: before a
- * supplier is assigned, not after.
+ * quotation, an overdue invoice) is a direct comparison against data
+ * Phases 6/8/10/12 already produce. The genuinely judgment-based part of
+ * "should we worry about this supplier" — reading their notes for red
+ * flags — lives in SupplierRecommender instead, where it's actually
+ * useful: before a supplier is assigned, not after.
  */
 class CheckOperationalRisks
 {
@@ -83,6 +83,16 @@ class CheckOperationalRisks
                     field: "quotations.{$quotation->id}.valid_until",
                     message: 'A sent quotation has passed its valid-until date with no response recorded.',
                     why: 'The customer may need a follow-up, or the price may need revisiting before resending.',
+                ));
+            }
+        }
+
+        foreach ($flightRequest->invoices as $invoice) {
+            if ($invoice->isOverdue()) {
+                $findings->push(new OperationalRiskFinding(
+                    field: "invoices.{$invoice->id}.due_date",
+                    message: "Invoice {$invoice->invoice_number} is past its due date with no payment recorded.",
+                    why: 'The customer may need a payment reminder.',
                 ));
             }
         }

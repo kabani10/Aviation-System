@@ -6,6 +6,7 @@ use App\Domain\Aircraft\Models\Aircraft;
 use App\Domain\Communications\Concerns\HasCommunications;
 use App\Domain\Customers\Models\Customer;
 use App\Domain\Documents\Concerns\HasDocuments;
+use App\Domain\Finance\Models\Invoice;
 use App\Domain\FlightRequests\Enums\FlightStatus;
 use App\Domain\FlightRequests\Enums\RequestSource;
 use App\Domain\Quotations\Models\Quotation;
@@ -24,15 +25,17 @@ use Spatie\Activitylog\Support\LogOptions;
 
 /**
  * The central record — everyone working an operation opens this one page.
- * Aggregate profitability across services lives on `Quotation` (Phase 10),
- * not here — a flight can have zero, one, or several quotations over time
- * (a rejected quote superseded by a revised one), so there's no single
- * "the" total to put on this record. Full financial reporting across
- * flights is still Finance's job (Phase 12). Per-service cost/selling
- * price exist as of Phase 6 (see Service) — `requested_services_summary`
- * stays as the freeform original ask ("handling, fuel, permits...") even
- * after it's broken into real Service records, since it's the customer's
- * own words, not something to overwrite.
+ * Aggregate profitability across services lives on `Quotation` (Phase 10)
+ * and `Invoice` (Phase 12), not here — a flight can have zero, one, or
+ * several of each over time (a rejected quote superseded by a revised
+ * one), so there's no single "the" total to put on this record.
+ * Cross-flight financial reporting is `ComputeFinancialSummary` (Phase
+ * 12), which aggregates across every flight's invoices rather than living
+ * here either. Per-service cost/selling price exist as of Phase 6 (see
+ * Service) — `requested_services_summary` stays as the freeform original
+ * ask ("handling, fuel, permits...") even after it's broken into real
+ * Service records, since it's the customer's own words, not something to
+ * overwrite.
  */
 #[Fillable([
     'customer_id', 'aircraft_id', 'callsign', 'origin_airport_id', 'destination_airport_id',
@@ -96,6 +99,11 @@ class FlightRequest extends Model
     public function quotations(): HasMany
     {
         return $this->hasMany(Quotation::class);
+    }
+
+    public function invoices(): HasMany
+    {
+        return $this->hasMany(Invoice::class);
     }
 
     public function displayLabel(): string

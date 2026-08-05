@@ -68,6 +68,12 @@ class RolesAndPermissionsSeeder extends Seeder
             // have no screen that shows a cost. Same class of gap as the
             // Sales fixes above.
             'services.view',
+            // reports.view as of Phase 12: the same spec sentence quoted
+            // above literally says "financial reports" — Finance never
+            // actually had this permission, only Management did (Phase 1
+            // seeder). Nothing exposed the gap until Phase 12 built the
+            // FinancialSummaryWidget for reports.view holders to see.
+            'reports.view',
         ],
         'Management' => [
             'flights.view',

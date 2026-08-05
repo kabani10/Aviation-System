@@ -250,11 +250,11 @@ which the spec covers for individual services but never states for the flight it
 not a deliberate scope line, so it's included.
 
 **Flight-level costs/selling prices are modeled as of Phase 10** — via `Quotation`, not a column on this
-model; see Quotation below for why a flight can have several totals over time rather than one. Full
-cross-flight financial reporting is still Finance's job (Phase 12). Per-service cost/selling price exist
-as of Phase 6 — see Service Management below. `requested_services_summary` stays even after a flight has
-real `Service` records: it's the customer's original ask in their own words, not something structured
-data replaces.
+model; see Quotation below for why a flight can have several totals over time rather than one. Invoicing
+and cross-flight financial reporting are Finance's job (Phase 12) — see Finance below. Per-service
+cost/selling price exist as of Phase 6 — see Service Management below. `requested_services_summary`
+stays even after a flight has real `Service` records: it's the customer's original ask in their own
+words, not something structured data replaces.
 
 **The dependent-select's filtering is a UI convenience, not the boundary — same principle as the
 `documents.download` check.** `aircraft_id`'s options are filtered to the selected customer's own
@@ -601,8 +601,8 @@ call `BuildFlightRequestDigest` already makes.
 5 with nothing behind it beyond a raw `Select` field on the edit form — the same shape of gap Phase 8
 closed for `ServiceStatus` (`SupplierRequestSent`/`QuotationReceived` with no action) and Phase 10
 closed for `QuotationStatus`. Phase 11 operationalizes the `Confirmed → InOperation → Completed` leg;
-`Invoiced`/`Closed` stay Finance's territory (Phase 12) — `CompleteFlight` deliberately stops at
-`Completed` and goes no further.
+`Invoiced`/`Closed` are Finance's territory (Phase 12, below) — `CompleteFlight` deliberately stops at
+`Completed` and goes no further, handing off to `SendInvoice`/`RecordInvoicePayment` from there.
 
 **`CheckFlightReadiness` is advisory, not a gate — the one deliberate departure from how this might
 read at first.** It checks whether every non-cancelled service is `Confirmed`/`Completed`, whether the
@@ -633,6 +633,71 @@ Fixed by gating it on `flights.manage`, same as the two new execution actions it
 gated only by a data condition (`->visible(fn () => $record->someState)`) and not also by a permission
 check inherits whatever the *page's* minimum access level is, not the action's actual sensitivity — that
 gap is easy to introduce again on a future action if this isn't kept in mind.
+
+## Finance
+
+The final phase per the roadmap — invoicing and cross-flight financial reporting, closing out
+`FlightStatus` all the way to `Closed` and finally giving Management's `reports.view` permission
+(unused since the Phase 1 seeder) something to display.
+
+**`App\Domain\Finance\Models\Invoice` has no line items or stored total of its own — it delegates to
+the `Quotation` it was generated from.** `CreateInvoiceFromQuotation` sources the flight's `Accepted`
+quotation (throwing if there isn't one, `->latest()` guarding the unusual case of more than one) and
+just references it; `Invoice::totalAmount()`/`profitMargin()` call straight through to
+`$this->quotation->totalSellingPrice()`/`profitMargin()`. This is one step further than Quotation's own
+"compute from lineItems, don't store a copy" reasoning: since the accepted Quotation's `lineItems` are
+already an immutable snapshot, re-snapshotting the same numbers into a second frozen table would just be
+a second copy of data that already can't drift. Simpler to have nothing to keep in sync at all.
+
+**Every state change is a named action, no generic edit — same shape as Quotation's `SendQuotation`/
+`RecordQuotationResponse`:**
+
+- **`SendInvoice`** emails `App\Mail\InvoiceMail` to the customer's `billing_email` (amount and due
+  date only, never cost — same boundary `QuotationMail` already draws), logs it on the *Invoice's* own
+  timeline, and moves `Invoice` → `Sent` / `FlightRequest.status` → `Invoiced`.
+- **`RecordInvoicePayment`** is how "the customer paid" enters the system — no payment gateway, no
+  partial payments, just an operator recording what came back, same pattern as
+  `RecordSupplierQuote`/`RecordQuotationResponse`. This is the one place `FlightStatus::Closed` gets
+  set — the final stop in the flight's entire lifecycle, four phases after `FlightStatus` was first
+  defined with nothing but `Cancelled` actually reachable.
+
+**No `invoices.*` permission — unlike Quotation, reuses `finance.manage`/`finance.view_prices`
+instead of minting a new pair.** `quotations.*` sat unused in `RolesAndPermissionsSeeder` since Phase 1,
+a clear signal it was pre-planned as its own permission. Nothing equivalent exists for invoices, and
+`finance.manage`/`finance.view_prices` already say exactly what's needed — inventing a parallel
+`invoices.*` pair when an existing permission fits would just be two ways to express the same grant.
+`InvoicePolicy::viewAny`/`view` uses `finance.view_prices` (Sales already relies on the same permission
+to view Quotations, and an invoice amount is exactly that — a selling price), while
+`create`/`update` uses `finance.manage`, since invoicing is Finance's job per the spec, not Sales's.
+
+**`invoice_number` is generated in the Action, not a model `creating` hook** — `CreateInvoiceFromQuotation`
+counts existing invoices for the flight's company (`Invoice::withoutGlobalScopes()->where('company_id', ...)`,
+deliberately not trusting `CompanyScope`/`CurrentCompany` alone for a number that must be exactly right
+regardless of ambient tenant context) and formats `INV-000001` upward. Keeping this in the Action instead
+of a `static::booted()` hook avoids relying on trait-boot ordering (`BelongsToCompany`'s own `creating`
+hook needs to run first to populate `company_id`) — a plain, testable method beats a hook whose
+correctness depends on *when* Eloquent decided to call it.
+
+**`App\Domain\Finance\Actions\ComputeFinancialSummary` and `FinancialSummaryWidget`** are the spec's
+"financial reports" — total invoiced, collected, outstanding, overdue (count and amount), and profit
+margin realized on paid invoices. Deterministic arithmetic over real invoice data, not an `AI/*` class,
+same reasoning as every other check/report in this app. The widget is gated on `reports.view` to appear
+at all, then the revenue-shaped stats additionally need `finance.view_prices` and the margin stat
+additionally needs `finance.view_costs` — field-level-on-top-of-screen-level gating, consistent with
+every other financial figure in the app, even though every current `reports.view` holder happens to have
+both today. **Finance gained `reports.view`** in this phase (spec-supported gap fix) — the exact
+sentence already quoted in Service Management ("Finance's whole job per the spec is 'supplier costs,
+profitability, financial reports'") names reports explicitly, yet only Management ever held the
+permission since the Phase 1 seeder. **Not built:** date-range filtering on the summary — it's an
+all-time total for now; a natural follow-up once real usage shows which window actually matters, not
+guessed at here.
+
+**`CheckOperationalRisks` gained a final finding**: a `Sent` invoice past its `due_date` with no payment
+recorded — same `isOverdue()`-computed-on-read shape as `Quotation::isExpired()`, and picked up for free
+by Phase 9's daily digest through the same call `BuildFlightRequestDigest` already makes. This closes
+the loop the spec's original "AI Risk Detection" feature started back in Phase 8: every financial
+document type this app has (`Service` quotes, `Quotation`, `Invoice`) now has its own staleness check
+feeding the same list.
 
 ## What NOT to do
 
