@@ -2,9 +2,15 @@
 
 namespace App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers;
 
+use App\AI\SupplierRecommendation\Recommenders\SupplierRecommender;
+use App\AI\Support\ClaudeApiException;
+use App\Domain\Services\Actions\RecordSupplierQuote;
+use App\Domain\Services\Actions\SendSupplierRequest;
 use App\Domain\Services\Enums\ServiceStatus;
+use App\Domain\Services\Models\Service;
 use App\Domain\Shared\Enums\ServiceType;
 use App\Domain\Suppliers\Models\Supplier;
+use App\Domain\Suppliers\Models\SupplierContact;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -12,10 +18,12 @@ use Filament\Forms\Components\TextInput;
 use Filament\Forms\Form;
 use Filament\Forms\Get;
 use Filament\Resources\RelationManagers\RelationManager;
+use Filament\Tables\Actions\Action;
 use Filament\Tables\Actions\CreateAction;
 use Filament\Tables\Actions\EditAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Illuminate\Contracts\View\View;
 use Illuminate\Support\Facades\Auth;
 
 /**
@@ -27,6 +35,17 @@ use Illuminate\Support\Facades\Auth;
  * the finer permission. Hidden fields are also not dehydrated — a hidden
  * field that still submits null would silently wipe an existing cost/price
  * when a non-Finance user saves other changes to the service.
+ *
+ * "Request quote" / "Record quote" (Phase 8) operationalize the
+ * SupplierRequestSent/QuotationReceived statuses that already existed on
+ * ServiceStatus since Phase 6 but had no action behind them. "Record quote"
+ * additionally requires finance.view_costs, same reasoning as the cost
+ * field above — the whole point of the action is entering one. "Suggest
+ * supplier" requires it too, for a subtler reason: the AI's rationale text
+ * is free-form and can end up stating a supplier's average cost outright
+ * (it's part of what SupplierRecommender gives Claude to reason over), so
+ * showing it to someone without cost visibility would leak through the
+ * back door what the form field correctly hides.
  */
 class ServicesRelationManager extends RelationManager
 {
@@ -108,6 +127,8 @@ class ServicesRelationManager extends RelationManager
                     ->dateTime()
                     ->placeholder('—')
                     ->color(fn ($record): ?string => $record->isOverdue() ? 'danger' : null),
+                TextColumn::make('quote_requested_at')->label('Requested')->dateTime()->placeholder('—')->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('quote_received_at')->label('Received')->dateTime()->placeholder('—')->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('cost')
                     ->money('USD')
                     ->visible(fn (): bool => Auth::user()->can('finance.view_costs')),
@@ -120,6 +141,67 @@ class ServicesRelationManager extends RelationManager
             ])
             ->actions([
                 EditAction::make(),
+
+                Action::make('requestQuote')
+                    ->label('Request quote')
+                    ->icon('heroicon-o-paper-airplane')
+                    ->visible(fn (Service $record): bool => Auth::user()->can('services.manage') && $record->supplier_id !== null)
+                    ->form([
+                        Select::make('supplier_contact_id')
+                            ->label('Send to')
+                            ->options(fn (Service $record): array => $record->supplier?->contacts()->pluck('name', 'id')->all() ?? [])
+                            ->required()
+                            ->native(false),
+                        Textarea::make('message')
+                            ->label('Additional message (optional)')
+                            ->rows(3),
+                    ])
+                    ->action(function (Service $record, array $data): void {
+                        $contact = SupplierContact::query()->findOrFail($data['supplier_contact_id']);
+
+                        app(SendSupplierRequest::class)($record, $contact, $data['message'] ?: null, Auth::user());
+                    })
+                    ->successNotificationTitle('Quote request sent'),
+
+                Action::make('recordQuote')
+                    ->label('Record quote')
+                    ->icon('heroicon-o-currency-dollar')
+                    ->visible(fn (): bool => Auth::user()->can('services.manage') && Auth::user()->can('finance.view_costs'))
+                    ->form([
+                        TextInput::make('cost')
+                            ->numeric()
+                            ->prefix('$')
+                            ->required(),
+                        Textarea::make('notes')
+                            ->rows(2),
+                    ])
+                    ->action(function (Service $record, array $data): void {
+                        app(RecordSupplierQuote::class)($record, (float) $data['cost'], $data['notes'] ?: null, Auth::user());
+                    })
+                    ->successNotificationTitle('Quote recorded'),
+
+                Action::make('suggestSupplier')
+                    ->label('Suggest supplier')
+                    ->icon('heroicon-o-sparkles')
+                    ->visible(fn (): bool => Auth::user()->can('services.manage') && Auth::user()->can('finance.view_costs'))
+                    ->modalHeading('Suggested suppliers')
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('Close')
+                    ->modalContent(function (Service $record): View {
+                        try {
+                            $recommendations = app(SupplierRecommender::class)($record);
+                            $error = null;
+                        } catch (ClaudeApiException $exception) {
+                            $recommendations = collect();
+                            $error = 'Could not get AI suggestions right now: '.$exception->getMessage();
+                        }
+
+                        return view('filament.flight-requests.supplier-suggestions', [
+                            'recommendations' => $recommendations,
+                            'supplierNames' => Supplier::query()->pluck('name', 'id'),
+                            'error' => $error,
+                        ]);
+                    }),
             ]);
     }
 }

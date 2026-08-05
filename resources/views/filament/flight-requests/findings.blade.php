@@ -8,6 +8,6 @@
             @endif
         </div>
     @empty
-        <p class="text-sm text-gray-500 dark:text-gray-400">No issues found — this flight request has everything currently checked for.</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400">{{ $emptyMessage ?? 'Nothing found.' }}</p>
     @endforelse
 </div>

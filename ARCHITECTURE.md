@@ -224,11 +224,15 @@ permits, ...), same shape as `Customer`: its own contacts (`SupplierContact` via
 - **`airports`** — a real `BelongsToMany` to `Airport`, unlike `services_offered`, because Airport is an
   actual entity (ICAO/IATA codes, country) worth joining to rather than tagging.
 
-**Not modeled, deliberately:** "average response time", "previous prices", and "service quality" from
-the original spec. These are computed from real supplier interactions (quotes sent, confirmations
-received) that don't exist until Service Management (Phase 6) — a static rating field today would be a
-number nobody updates. `notes` (freeform) covers "previous operational problems" in the meantime, since
-that's genuinely just something procurement writes down, not something derived from data.
+**"Average response time" and "previous prices" from the original spec are modeled as of Phase 8** —
+see `ComputeSupplierPerformance` under AI request extraction below. They were deliberately deferred
+until now: both are computed from real supplier interactions (quotes sent, responses received) that
+didn't exist until Service Management (Phase 6) produced a place to record a cost, and Phase 8's
+supplier quote workflow produced the timestamps. A static rating field before either existed would
+have been a number nobody updates. **Still not modeled:** "service quality" — there's no single metric
+in the data for that yet (it's closer to a subjective rating than something derivable), and `notes`
+(freeform) continues to cover "previous operational problems" for now, since that's genuinely just
+something procurement writes down.
 
 `SupplierPolicy` / `SupplierContactPolicy` consume `suppliers.view` / `suppliers.manage` — permissions
 that already existed in `RolesAndPermissionsSeeder` since Phase 1 (Operations and Management view-only,
@@ -314,11 +318,13 @@ documented inline in `RolesAndPermissionsSeeder`.
 supplier outside that list — unlike `aircraft_id`/`customer_id` in Flight Requests, a service using an
 "unlisted" supplier isn't invalid data, just unusual, so there's no server-side rule enforcing it.
 
-**Not modeled:** "operational risks" from the spec. That's AI Risk Detection reading deadlines,
-confirmations, and supplier responses across services — not a field an operator fills in by hand.
-`HasDocuments` is on the model (a service's own permit/certificate belongs here, not on the flight),
-but there's no dedicated document UI for it yet: Filament doesn't nest a `RelationManager` inside
-another `RelationManager`, and `Service` has no top-level resource of its own to hang one off.
+**"Operational risks" from the spec is modeled as of Phase 8** — `CheckOperationalRisks`, reading
+deadlines, statuses, and quote-request timestamps across a flight's services; see AI request
+extraction below for why it's deterministic domain code, not an `AI/*` class, despite the spec calling
+it "AI Risk Detection". `HasDocuments` is still on the `Service` model (a service's own permit/
+certificate belongs here, not on the flight) with no dedicated document UI: Filament doesn't nest a
+`RelationManager` inside another `RelationManager`, and `Service` has no top-level resource of its own
+to hang one off.
 
 **A `ViewRecord` page is required wherever view-only roles need to reach a `RelationManager`, not just
 `ListRecords`/`EditRecord`.** Filament's `EditRecord` page requires *update* rights by default — a role
@@ -393,8 +399,9 @@ existing creation path) or `email`. `needsReview(): bool` is `source === Email &
 `FlightStatus`; an AI draft is a perfectly normal `NewRequest` that additionally needs a human to look
 at it once. The Filament table shows a warning badge ("AI draft — needs review") in place of the
 normal source label while that's true, and both `ViewFlightRequest`/`EditFlightRequest` (via the
-shared `HasAiReviewActions` trait — Filament resource pages don't share a common ancestor worth
-putting this on instead) expose a "Mark AI draft reviewed" header action that only appears while
+shared `HasFlightRequestReviewActions` trait — Filament resource pages don't share a common ancestor
+worth putting this on instead; renamed from `HasAiReviewActions` in Phase 8 once it grew a second
+non-AI action, see below) expose a "Mark AI draft reviewed" header action that only appears while
 `needsReview()` is true.
 
 **`App\Domain\FlightRequests\Actions\CheckMissingInformation` is plain domain code, not `AI/*`** —
@@ -414,6 +421,75 @@ permit-specific rules for the same reason; this is the same gap surfacing again,
 not built: a `services_count`-style live "completeness" column on the flight-request list — computing
 `CheckMissingInformation` per row for every row in a list is a real cost that isn't worth taking until
 list sizes actually make it matter; the header action covers "check this one flight" for now.
+
+## Supplier quotes and AI supplier recommendation
+
+Phase 8 operationalizes the `SupplierRequestSent`/`QuotationReceived` statuses that existed on
+`ServiceStatus` since Phase 6 with no action behind them, and uses the data that produces to close two
+gaps flagged as deliberately deferred in earlier phases: Suppliers' "average response time"/"previous
+prices" (Phase 4) and Service Management's "operational risks" (Phase 6).
+
+**The quote request/response cycle.** `Service` gained two nullable timestamps, `quote_requested_at`
+and `quote_received_at`, plus `HasCommunications` (see Documents & communications above — Service is
+now the sixth model with a timeline). Two Actions drive them:
+
+- **`SendSupplierRequest`** emails a `SupplierContact` via `App\Mail\SupplierQuoteRequestMail` — the
+  first outbound Mailable in the app; everything before this was inbound-only (Postmark). It logs the
+  send as a `Communication` (`EmailOut`) on the `Service` itself, sets `quote_requested_at`, and moves
+  status to `SupplierRequestSent`. The email deliberately omits `selling_price` — the supplier needs to
+  know what's being asked of them, not what the customer is being charged.
+- **`RecordSupplierQuote`** sets `cost`, `quote_received_at`, moves status to `QuotationReceived`, and
+  logs the response as a `Communication` (`EmailIn`) — whether the quote actually arrived by email or
+  was recorded from a phone call, the timeline records it as received either way.
+
+Both are exposed as row actions on `ServicesRelationManager`, not folded into the existing edit form:
+they're one-shot events with their own side effects (an email sent, a timeline entry, a status
+transition), not just field edits.
+
+**`App\Domain\Suppliers\Actions\ComputeSupplierPerformance`** turns `quote_requested_at`/
+`quote_received_at`/`cost` history into `servicesCount`, `averageResponseTimeHours`, `averageCost`,
+`confirmedCount`, and `atRiskOrCancelledCount` for one supplier (optionally scoped to a `ServiceType`).
+Deliberately deterministic — plain averages and counts, nothing an LLM should be computing — and
+consumed by `SupplierRecommender` below rather than shown as some standalone "supplier score" screen,
+since a bare number without the reasoning behind it isn't much more useful than the "static rating
+field nobody updates" this was deferred to avoid in the first place.
+
+**`App\AI\SupplierRecommendation\Recommenders\SupplierRecommender` is where this phase's AI actually
+lives**, and it's deliberately narrow: given a `Service`, it gathers active suppliers whose
+`services_offered` includes that service's type, computes each one's `SupplierPerformance`, and asks
+Claude to rank them — weighing the deterministic metrics against each supplier's freeform `notes`. The
+notes are the genuinely unstructured part an LLM is suited for (a formula can't tell "closed for
+renovation last month" from "great to work with" the way reading the sentence can); the metrics
+computation itself doesn't touch the API. Same defensive pattern as `CreateFlightRequestFromExtraction`
+in Phase 7: a recommended `supplier_id` is filtered against the actual candidate list before being
+trusted, since Claude was only *given* real ids, not validated against them. Surfaced as a "Suggest
+supplier" action opening a read-only ranked list with rationale — the operator still picks the supplier
+by hand in the form afterward, same "AI drafts, human decides" principle as request extraction.
+
+**`App\Domain\FlightRequests\Actions\CheckOperationalRisks` is the spec's "AI Risk Detection", and
+like `CheckMissingInformation` it isn't an `AI/*` class** — every check (a service flagged `AtRisk`, a
+passed deadline, a quote request unanswered for a week, a service inside 3 days of its deadline and
+still unconfirmed) is a direct comparison against data the quote workflow above already produces. The
+one genuinely judgment-based risk question — "should we be worried about this supplier" — is handled
+by `SupplierRecommender` instead, where it's actually useful: before a supplier is assigned, not after.
+Because this and `CheckMissingInformation` are both deterministic "things you check while reviewing a
+flight" actions that happen to share a header-action UI pattern with the one real AI-driven action
+(`markReviewed`), the trait that holds all three was renamed from `HasAiReviewActions` to
+`HasFlightRequestReviewActions` in this phase — the old name overstated what was actually AI.
+
+**Cost data can leak through an AI rationale, not just a table column.** `SupplierRecommender`'s output
+is free-form text, and the metrics it reasons over include `averageCost` — so a rationale can end up
+stating a supplier's average price outright, something Phase 6 carefully hid from anyone without
+`finance.view_costs` at the field level. The "Suggest supplier" action is gated on
+`finance.view_costs` for exactly this reason, not just `services.manage`: hiding the `cost` *column*
+means nothing if the same number reaches the same user through an AI-generated sentence instead.
+
+**Procurement gained `services.manage`** (previously view-only) — the same class of spec-supported gap
+as Sales/`flights.manage` (Phase 5) and Sales+Finance/`services.view` (Phase 6). Procurement is who
+actually talks to suppliers per the spec, and already held `finance.view_costs`, but had no permission
+to trigger `SendSupplierRequest`/`RecordSupplierQuote` at all until this phase — a gap that only became
+visible once those actions existed to check permissions against. Documented inline in
+`RolesAndPermissionsSeeder`.
 
 ## What NOT to do
 

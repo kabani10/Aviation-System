@@ -2,6 +2,8 @@
 
 use App\Domain\FlightRequests\Enums\RequestSource;
 use App\Domain\FlightRequests\Models\FlightRequest;
+use App\Domain\Services\Enums\ServiceStatus;
+use App\Domain\Services\Models\Service;
 use App\Domain\Tenancy\Models\Company;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages\EditFlightRequest;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages\ViewFlightRequest;
@@ -62,4 +64,19 @@ it('shows the missing information action listing current findings', function () 
         ->assertActionExists('missingInformation')
         ->mountAction('missingInformation')
         ->assertSee('Passenger count is missing.');
+});
+
+it('shows the operational risks action listing current findings', function () {
+    $company = Company::factory()->create();
+    $sales = salesUserFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    Service::factory()->for($flightRequest)->create(['status' => ServiceStatus::AtRisk]);
+
+    Livewire::actingAs($sales)
+        ->test(ViewFlightRequest::class, ['record' => $flightRequest->getRouteKey()])
+        ->assertActionExists('operationalRisks')
+        ->mountAction('operationalRisks')
+        ->assertSee('is flagged at risk.');
 });

@@ -47,7 +47,14 @@ class RolesAndPermissionsSeeder extends Seeder
         'Procurement' => [
             'suppliers.view', 'suppliers.manage',
             'flights.view',
-            'services.view',
+            // services.manage (not just .view) as of Phase 8: Procurement is
+            // who actually talks to suppliers — requesting quotes, recording
+            // what came back — but until now only Operations/Sales could
+            // manage a service at all, leaving Procurement able to see costs
+            // (finance.view_costs, below) with no action that lets them
+            // record one. Same class of gap as the Sales/Finance fixes in
+            // Phase 5/6, just discovered a phase later.
+            'services.view', 'services.manage',
             'finance.view_costs',
         ],
         'Finance' => [

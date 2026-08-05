@@ -3,13 +3,13 @@
 namespace App\Filament\Resources\FlightRequests\FlightRequestResource\Pages;
 
 use App\Filament\Resources\FlightRequests\FlightRequestResource;
-use App\Filament\Resources\FlightRequests\FlightRequestResource\Concerns\HasAiReviewActions;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\Concerns\HasFlightRequestReviewActions;
 use Filament\Resources\Pages\EditRecord;
 
 /** No delete action — set status to Cancelled instead, same "no hard delete" convention as everywhere else. */
 class EditFlightRequest extends EditRecord
 {
-    use HasAiReviewActions;
+    use HasFlightRequestReviewActions;
 
     protected static string $resource = FlightRequestResource::class;
 
@@ -17,7 +17,7 @@ class EditFlightRequest extends EditRecord
     {
         return [
             ...parent::getHeaderActions(),
-            ...$this->aiReviewHeaderActions(),
+            ...$this->flightRequestReviewHeaderActions(),
         ];
     }
 }

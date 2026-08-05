@@ -2,6 +2,7 @@
 
 namespace App\Domain\Services\Models;
 
+use App\Domain\Communications\Concerns\HasCommunications;
 use App\Domain\Documents\Concerns\HasDocuments;
 use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\Services\Enums\ServiceStatus;
@@ -17,20 +18,22 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 /**
  * One line item on a flight — ground handling, fuel, a landing permit.
  * "Operational risks" from the original spec isn't a field here: that's
- * AI Risk Detection reading deadlines/confirmations/etc across services,
- * not something an operator types in manually. HasDocuments is on the
- * model (a service's own certificates/permits belong here, not on the
- * flight), but there's no nested RelationManager UI for it yet — Filament
- * doesn't nest a RelationManager inside another RelationManager, and
- * Service doesn't have its own top-level resource to hang one off of.
+ * CheckOperationalRisks reading deadlines/confirmations/etc across
+ * services (Phase 8), not something an operator types in manually.
+ * HasDocuments is on the model (a service's own certificates/permits
+ * belong here, not on the flight), but there's no nested RelationManager
+ * UI for it yet — Filament doesn't nest a RelationManager inside another
+ * RelationManager, and Service doesn't have its own top-level resource to
+ * hang one off of. HasCommunications is used as of Phase 8, for the
+ * quote-request/quote-received log — see SendSupplierRequest.
  */
 #[Fillable([
     'type', 'status', 'responsible_user_id', 'supplier_id', 'cost', 'selling_price',
-    'supplier_confirmed_at', 'deadline', 'notes',
+    'quote_requested_at', 'quote_received_at', 'supplier_confirmed_at', 'deadline', 'notes',
 ])]
 class Service extends Model
 {
-    use BelongsToCompany, HasDocuments, HasFactory;
+    use BelongsToCompany, HasCommunications, HasDocuments, HasFactory;
 
     protected function casts(): array
     {
@@ -39,6 +42,8 @@ class Service extends Model
             'status' => ServiceStatus::class,
             'cost' => 'decimal:2',
             'selling_price' => 'decimal:2',
+            'quote_requested_at' => 'datetime',
+            'quote_received_at' => 'datetime',
             'supplier_confirmed_at' => 'datetime',
             'deadline' => 'datetime',
         ];
