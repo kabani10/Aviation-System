@@ -40,6 +40,13 @@ class AdminPanelProvider extends PanelProvider
             ->pages([
                 Pages\Dashboard::class,
             ])
+            // Bell icon in the topbar, reading from the notifications table —
+            // what SendFlightRequestDigests writes to (see ARCHITECTURE.md's
+            // "Notifications & reminders"). Polling, not broadcast: no
+            // websocket infrastructure exists yet, and a daily digest doesn't
+            // need real-time delivery.
+            ->databaseNotifications()
+            ->databaseNotificationsPolling('30s')
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
             ->widgets([
                 Widgets\AccountWidget::class,

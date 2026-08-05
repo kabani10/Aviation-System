@@ -491,6 +491,45 @@ to trigger `SendSupplierRequest`/`RecordSupplierQuote` at all until this phase �
 visible once those actions existed to check permissions against. Documented inline in
 `RolesAndPermissionsSeeder`.
 
+## Notifications & reminders
+
+Phases 7 and 8 built three "check something and show it in a modal" actions —
+`needsReview()`/`CheckMissingInformation`/`CheckOperationalRisks` — that an operator only ever sees if
+they happen to open the right flight and click the right button. Phase 9 doesn't add a new check; it
+makes the existing ones proactive.
+
+**`App\Domain\FlightRequests\Actions\BuildFlightRequestDigest`** takes one `Company` and returns every
+active flight's outstanding messages (an unreviewed AI draft, plus whatever `CheckMissingInformation`
+and `CheckOperationalRisks` already report), grouped by recipient: the flight's `assignedUsers` when
+there are any, or every `flights.manage` holder in the company when there aren't — which is the normal
+case for a fresh AI draft, since nobody's been assigned to it yet. "Active" excludes `Completed`,
+`Invoiced`, `Closed`, and `Cancelled` — nothing left to act on there. Kept as a pure function of one
+company's data (no sending, no side effects) so "what's currently outstanding" is testable on its own.
+
+**`SendFlightRequestDigests`** is the actual scheduled job: it loops every `Company` — a genuine
+cross-tenant loop, the kind Multi-tenancy above calls out as the one legitimate case, with
+`CurrentCompany` set explicitly before each company's digest is built, same convention as every other
+job — and sends one `Filament\Notifications\Notification::make()->sendToDatabase($user)` per user who
+has anything outstanding. Fired daily at 07:00 by `app:send-flight-request-digests`
+(`routes/console.php`'s `Schedule::command(...)`), which just calls the Action — the command itself has
+no logic of its own, same "one Action, one job" convention used everywhere else.
+
+**Two deliberate scope decisions, not oversights:**
+
+- **No de-duplication against what was already sent.** This is a daily snapshot of what's currently
+  outstanding, not an event log — an issue still open after yesterday's digest is still worth surfacing
+  today. Tracking "have I already told this user about this specific finding" would need persistent
+  per-finding state for a marginal reduction in repeat notifications; not worth it until real usage
+  shows the digest is too noisy.
+- **In-app only (Filament's database-notifications bell — `->databaseNotifications()` +
+  `->databaseNotificationsPolling('30s')` on the panel), no email.** Postmark/Mailable delivery already
+  exists (Phase 8's `SupplierQuoteRequestMail`) and would be a small addition, but a daily email on top
+  of a daily in-app digest is a product decision about how noisy this should be, not a technical one —
+  better made once someone is actually using the in-app version and says they want email too.
+
+`notifications` — Laravel's standard table — didn't exist before this phase; `User` has carried
+`Notifiable` unused since the Phase 0/1 scaffold.
+
 ## What NOT to do
 
 - Don't add a model without `BelongsToCompany` unless it's genuinely global (e.g. `Airport`,
