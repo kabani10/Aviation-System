@@ -2,6 +2,8 @@
 
 use App\Domain\FlightRequests\Actions\CheckOperationalRisks;
 use App\Domain\FlightRequests\Models\FlightRequest;
+use App\Domain\Quotations\Enums\QuotationStatus;
+use App\Domain\Quotations\Models\Quotation;
 use App\Domain\Services\Enums\ServiceStatus;
 use App\Domain\Services\Models\Service;
 use App\Domain\Tenancy\Models\Company;
@@ -96,6 +98,51 @@ it('does not flag a confirmed service no matter how tight the deadline or how st
     $findings = app(CheckOperationalRisks::class)($flightRequest);
 
     expect($findings->where('affectedService', $service->type->label()))->toBeEmpty();
+});
+
+it('flags a sent quotation that has passed its valid-until date with no response', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    $quotation = Quotation::factory()->for($flightRequest)->create([
+        'status' => QuotationStatus::Sent,
+        'valid_until' => now()->subDay(),
+    ]);
+
+    $findings = app(CheckOperationalRisks::class)($flightRequest);
+
+    expect($findings->pluck('field'))->toContain("quotations.{$quotation->id}.valid_until");
+});
+
+it('does not flag a sent quotation still within its validity window', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    Quotation::factory()->for($flightRequest)->create([
+        'status' => QuotationStatus::Sent,
+        'valid_until' => now()->addWeek(),
+    ]);
+
+    $findings = app(CheckOperationalRisks::class)($flightRequest);
+
+    expect($findings)->toBeEmpty();
+});
+
+it('does not flag an expired-by-date quotation that was already accepted', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    Quotation::factory()->for($flightRequest)->create([
+        'status' => QuotationStatus::Accepted,
+        'valid_until' => now()->subDay(),
+    ]);
+
+    $findings = app(CheckOperationalRisks::class)($flightRequest);
+
+    expect($findings)->toBeEmpty();
 });
 
 it('returns no findings for a flight with no risky services', function () {

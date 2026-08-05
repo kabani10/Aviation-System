@@ -249,10 +249,12 @@ were built for. `FlightStatus` mirrors the spec's Step 11 lifecycle with one add
 which the spec covers for individual services but never states for the flight itself — an omission,
 not a deliberate scope line, so it's included.
 
-**Not modeled yet:** flight-level costs/selling prices (needs Quotation, Phase 10, and Finance, Phase
-12, to aggregate profitability across services). Per-service cost/selling price exist as of Phase 6 —
-see Service Management below. `requested_services_summary` stays even after a flight has real `Service`
-records: it's the customer's original ask in their own words, not something structured data replaces.
+**Flight-level costs/selling prices are modeled as of Phase 10** — via `Quotation`, not a column on this
+model; see Quotation below for why a flight can have several totals over time rather than one. Full
+cross-flight financial reporting is still Finance's job (Phase 12). Per-service cost/selling price exist
+as of Phase 6 — see Service Management below. `requested_services_summary` stays even after a flight has
+real `Service` records: it's the customer's original ask in their own words, not something structured
+data replaces.
 
 **The dependent-select's filtering is a UI convenience, not the boundary — same principle as the
 `documents.download` check.** `aircraft_id`'s options are filtered to the selected customer's own
@@ -529,6 +531,69 @@ no logic of its own, same "one Action, one job" convention used everywhere else.
 
 `notifications` — Laravel's standard table — didn't exist before this phase; `User` has carried
 `Notifiable` unused since the Phase 0/1 scaffold.
+
+## Quotation
+
+`App\Domain\Quotations\Models\Quotation` is the spec's "Quotation Sent to Customer" step — the formal
+offer built from a flight's priced services and sent to the customer for approval.
+`quotations.view`/`quotations.manage` existed unused in `RolesAndPermissionsSeeder` since Phase 1,
+waiting for this module.
+
+**A Quotation is a snapshot, not a live view.** `CreateQuotationFromServices` copies each priced,
+non-cancelled `Service` (type label, cost, selling price) into a `QuotationLineItem` at generation time.
+Once created, a quotation's totals never drift even if the underlying `Service.selling_price` changes
+afterward — a customer who accepted a quote is agreeing to a fixed number, not whatever the live data
+happens to say later. This is also why `totalCost()`/`totalSellingPrice()`/`profitMargin()` are computed
+from `lineItems` on read rather than stored columns on `Quotation` — same "a stored copy is just
+something that can drift" reasoning as `Service::profitMargin()`, applied one level up. A `Service` with
+no `selling_price` yet is simply left out of the snapshot; there's no partial-price line to show.
+
+**Multiple quotations per flight are the normal case, not an edge case.** `CreateQuotationFromServices`
+always creates a new `Quotation` rather than editing an existing one — a rejected quote gets superseded
+by a fresh one after re-pricing, and both stay visible in `QuotationsRelationManager`'s history. This is
+also why `QuotationPolicy::delete()` returns `false`: a superseded quotation is history, not a mistake
+to clean up, same "no hard delete" convention as every other core record.
+
+**No generic edit — every state change is a named action**, mirroring Phase 8's supplier-quote actions:
+
+- **`SendQuotation`** emails `App\Mail\QuotationMail` to the customer's `billing_email` (throwing if
+  there isn't one — the panel action catches this and shows a friendly notification instead of a 500),
+  logs the send as a `Communication` **on the `Quotation` itself** (not the flight — a flight's several
+  quotations each keep their own correspondence), and moves `Quotation` → `Sent` /
+  `FlightRequest.status` → `QuotationSent`. `QuotationMail` shows only `selling_price`, never `cost` —
+  same customer/tenant financial boundary `SupplierQuoteRequestMail` draws for suppliers, just facing
+  the other direction.
+- **`RecordQuotationResponse`** is how "the customer accepted" enters the system — there's no customer
+  portal, so an operator always records what came back by phone or email reply, same pattern as
+  `RecordSupplierQuote`. Accepting is the one place in the app that sets `FlightStatus::Confirmed`;
+  rejecting leaves the flight's status alone (still `QuotationSent`) so the operator can generate and
+  send a revised quotation without the flight appearing to regress.
+
+**Two access surfaces, same "standalone for browsing, RelationManager for doing" split as
+Documents/Communications** — but the split here is by *purpose*, not just scope. The standalone
+`QuotationResource` (List + View only, no create/edit routes at all) is the company-wide pipeline view
+Sales/Finance/Management actually want ("show me everything sent, everything overdue"). The actions
+that change state — Generate/Send/Mark accepted/Mark rejected — live only on `QuotationsRelationManager`
+under `FlightRequestResource`, since every one of them needs the owning flight in scope anyway.
+
+**Deliberately not built: PDF generation.** The spec's "send a quotation" is satisfied here by a
+formatted HTML email (`resources/views/mail/quotation.blade.php`) with a line-item table, not a PDF
+attachment. Building a generic document-generation capability speculatively — before Quotation's actual
+field requirements were known — was explicitly deferred when Phase 9 was scoped (see that phase's
+"document generation" alternative that was passed over); now that a real, first customer-facing
+document exists, a PDF version is a well-scoped future addition to build *from* this Mailable, not
+infrastructure to guess at ahead of it.
+
+**Management gained `quotations.view`** (spec-supported gap fix, same class as Sales/Finance/Procurement
+in earlier phases) — Management is view-only across every other financial/operational module, and
+quotations was simply the one left out because there was nothing to view until this phase.
+
+**`CheckOperationalRisks` gained one more finding**: a `Sent` quotation past its `valid_until` with no
+response (`Quotation::isExpired()`). `QuotationStatus::Expired` exists as an enum case for display but
+is never set automatically by a scheduled job — same "compute on read, don't maintain a stored status
+that can go stale" principle as everywhere else; `isExpired()` and this risk finding are what actually
+surface it, and Phase 9's daily digest picks it up for free through the same `CheckOperationalRisks`
+call `BuildFlightRequestDigest` already makes.
 
 ## What NOT to do
 

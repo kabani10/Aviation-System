@@ -73,6 +73,13 @@ class RolesAndPermissionsSeeder extends Seeder
             'flights.view',
             'services.view',
             'suppliers.view',
+            // quotations.view as of Phase 10: Management is view-only across
+            // every other financial/operational module (flights, services,
+            // suppliers, costs, prices) for oversight — quotations was the
+            // one left out, simply because there was nothing to view until
+            // this phase built the module. Same class of gap as the
+            // Sales/Finance/Procurement fixes in earlier phases.
+            'quotations.view',
             'finance.view_costs', 'finance.view_prices',
             'reports.view',
         ],
