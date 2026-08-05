@@ -7,6 +7,7 @@ use App\Domain\FlightRequests\Actions\CheckOperationalRisks;
 use App\Domain\FlightRequests\Models\FlightRequest;
 use Filament\Actions\Action;
 use Illuminate\Contracts\View\View;
+use Illuminate\Support\Facades\Auth;
 
 /**
  * Shared between ViewFlightRequest and EditFlightRequest — all three
@@ -53,7 +54,14 @@ trait HasFlightRequestReviewActions
                 ->label('Mark AI draft reviewed')
                 ->icon('heroicon-o-check-badge')
                 ->color('success')
-                ->visible(fn (): bool => $this->getRecord()->needsReview())
+                // flights.manage, not just visible-on-the-view-page: without
+                // this a view-only role (Procurement/Finance/Management, who
+                // all reach ViewFlightRequest on flights.view alone — see
+                // Service Management's "ViewRecord page" note) could mark an
+                // AI draft reviewed despite having no edit rights on the
+                // flight at all. Found while wiring the same gate onto
+                // Phase 11's execution actions below.
+                ->visible(fn (): bool => Auth::user()->can('flights.manage') && $this->getRecord()->needsReview())
                 ->requiresConfirmation()
                 ->modalDescription('Confirms this AI-drafted flight request has been checked and corrected as needed.')
                 ->action(function (): void {

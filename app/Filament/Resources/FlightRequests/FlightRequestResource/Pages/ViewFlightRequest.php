@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\FlightRequests\FlightRequestResource\Pages;
 
 use App\Filament\Resources\FlightRequests\FlightRequestResource;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\Concerns\HasFlightExecutionActions;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Concerns\HasFlightRequestReviewActions;
 use Filament\Resources\Pages\ViewRecord;
 
@@ -15,6 +16,7 @@ use Filament\Resources\Pages\ViewRecord;
  */
 class ViewFlightRequest extends ViewRecord
 {
+    use HasFlightExecutionActions;
     use HasFlightRequestReviewActions;
 
     protected static string $resource = FlightRequestResource::class;
@@ -24,6 +26,7 @@ class ViewFlightRequest extends ViewRecord
         return [
             ...parent::getHeaderActions(),
             ...$this->flightRequestReviewHeaderActions(),
+            ...$this->flightExecutionHeaderActions(),
         ];
     }
 }

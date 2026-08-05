@@ -42,6 +42,8 @@ use Spatie\Activitylog\Support\LogOptions;
     // never a form — see the "mass-assignment protection is about forms,
     // not about hiding a field from your own Actions" note in ARCHITECTURE.md.
     'source', 'reviewed_at', 'extraction_metadata',
+    // Set only by MarkFlightInOperation/CompleteFlight, same reasoning.
+    'operation_started_at', 'completed_at',
 ])]
 class FlightRequest extends Model
 {
@@ -56,6 +58,8 @@ class FlightRequest extends Model
             'arrival_at' => 'datetime',
             'reviewed_at' => 'datetime',
             'extraction_metadata' => 'array',
+            'operation_started_at' => 'datetime',
+            'completed_at' => 'datetime',
         ];
     }
 

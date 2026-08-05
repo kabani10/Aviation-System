@@ -595,6 +595,45 @@ that can go stale" principle as everywhere else; `isExpired()` and this risk fin
 surface it, and Phase 9's daily digest picks it up for free through the same `CheckOperationalRisks`
 call `BuildFlightRequestDigest` already makes.
 
+## Flight execution
+
+`FlightStatus`'s `Confirmed → InOperation → Completed → Invoiced → Closed` tail has existed since Phase
+5 with nothing behind it beyond a raw `Select` field on the edit form — the same shape of gap Phase 8
+closed for `ServiceStatus` (`SupplierRequestSent`/`QuotationReceived` with no action) and Phase 10
+closed for `QuotationStatus`. Phase 11 operationalizes the `Confirmed → InOperation → Completed` leg;
+`Invoiced`/`Closed` stay Finance's territory (Phase 12) — `CompleteFlight` deliberately stops at
+`Completed` and goes no further.
+
+**`CheckFlightReadiness` is advisory, not a gate — the one deliberate departure from how this might
+read at first.** It checks whether every non-cancelled service is `Confirmed`/`Completed`, whether the
+flight has any services at all, and whether a quotation was actually `Accepted` (a defensive check,
+since the raw status `Select` still allows a manual override that skips `RecordQuotationResponse`
+entirely). `MarkFlightInOperation`/`CompleteFlight` show these findings in the confirmation modal before
+the operator proceeds, but never block the transition on them — same "the system informs, the human
+decides" principle `CheckMissingInformation`/`CheckOperationalRisks` already established. A plane can
+still fly with an imperfect paper trail; the point of this check is making sure nobody does that by
+accident, not preventing it outright.
+
+**The raw `status` `Select` field on the edit form is untouched, deliberately** — `MarkFlightInOperation`
+and `CompleteFlight` are a *guided* path for the common forward case, not a replacement for the existing
+one. An operator who needs to correct a status (a misclick, an unusual workflow) still has the plain
+field as an escape hatch; Phase 11 adds structure without removing flexibility that already existed.
+
+**`operation_started_at`/`completed_at`** are set by their respective actions — same "track the
+checkpoint, don't just flip a status" convention as `Service.quote_requested_at`/`quote_received_at` and
+`Quotation.sent_at`/`responded_at`. Both actions log a `SystemEvent` `Communication` on the flight, same
+as everywhere else a state transition happens.
+
+**A latent permission gap found and fixed while wiring this**: `markReviewed` (Phase 7's "mark AI draft
+reviewed" action) had no permission check of its own — it relied on reaching `ViewFlightRequest` at all,
+but that page is reachable on `flights.view` alone (Procurement, Finance, Management all get there
+without `flights.manage` — see Service Management's `ViewRecord` note). A view-only role could click it.
+Fixed by gating it on `flights.manage`, same as the two new execution actions it now sits beside in
+`HasFlightRequestReviewActions`/`HasFlightExecutionActions`. Worth a broader note: any header action
+gated only by a data condition (`->visible(fn () => $record->someState)`) and not also by a permission
+check inherits whatever the *page's* minimum access level is, not the action's actual sensitivity — that
+gap is easy to introduce again on a future action if this isn't kept in mind.
+
 ## What NOT to do
 
 - Don't add a model without `BelongsToCompany` unless it's genuinely global (e.g. `Airport`,
