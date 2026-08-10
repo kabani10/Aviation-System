@@ -54,6 +54,24 @@ class CheckMissingInformation
             ));
         }
 
+        foreach ($flightRequest->legs as $leg) {
+            if ($leg->departure_at === null) {
+                $findings->push(new MissingInformationFinding(
+                    field: "legs.{$leg->id}.departure_at",
+                    message: "Leg {$leg->sequence}'s departure time is missing.",
+                    why: 'Supplier scheduling and permit timing both depend on it.',
+                ));
+            }
+
+            if ($leg->arrival_at === null) {
+                $findings->push(new MissingInformationFinding(
+                    field: "legs.{$leg->id}.arrival_at",
+                    message: "Leg {$leg->sequence}'s arrival time is missing.",
+                    why: 'Ground handling and crew arrangements at the destination depend on it.',
+                ));
+            }
+        }
+
         $expiredDocument = $flightRequest->aircraft?->documents()
             ->whereNotNull('expires_at')
             ->where('expires_at', '<', now())

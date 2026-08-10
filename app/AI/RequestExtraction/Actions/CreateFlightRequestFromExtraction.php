@@ -17,18 +17,25 @@ use Exception;
 use Illuminate\Support\Carbon;
 
 /**
- * Turns an extraction into a real FlightRequest — but only when every
- * hard-required field (customer, aircraft belonging to that customer, and
- * every extracted leg's airports and a valid departure/arrival pair)
- * resolved with confidence. The schema requires those columns NOT NULL, so
- * a partial extraction can't become a partial FlightRequest the way the
- * spec's "AI draft" language might suggest; instead the raw extraction is
+ * Turns an extraction into a real FlightRequest — but only when the
+ * fields that identify *what's being asked for* (customer, aircraft
+ * belonging to that customer, and every extracted leg's origin and
+ * destination airport) resolved with confidence. One unresolved leg route
+ * fails the whole extraction, same all-or-nothing reasoning as an
+ * unresolved customer or aircraft — a flight missing its second leg's
+ * route isn't a draft worth auto-creating. Otherwise the raw extraction is
  * stashed on the Communication's metadata for an operator to use when
  * creating the request by hand, and the Communication stays where
- * ReceiveInboundEmail put it (on the Company). One unresolved leg fails
- * the whole extraction, same all-or-nothing reasoning as an unresolved
- * customer or aircraft — a flight missing its second leg isn't a draft
- * worth auto-creating.
+ * ReceiveInboundEmail put it (on the Company).
+ *
+ * A leg's departure/arrival times are deliberately NOT part of that gate —
+ * "departing tomorrow" with no arrival time is still a real, actionable
+ * request, just one with a gap. Guessing a timestamp would be worse than
+ * leaving it blank, so an unparseable or missing time is left null on the
+ * FlightLeg (nullable columns, see the migration) and picked up by
+ * CheckMissingInformation instead, the same way a missing passenger count
+ * already is. An explicit but nonsensical pair (arrival not after
+ * departure) still fails the leg, since that's not "missing", it's wrong.
  *
  * Each leg's guessed service_types (see RequestExtractionPrompt) become
  * real, draft Service rows — status NotStarted, no supplier or price, the
@@ -106,13 +113,17 @@ class CreateFlightRequestFromExtraction
     }
 
     /**
-     * Resolves every extracted leg to a real Airport pair and a valid
-     * departure/arrival, in order. Returns null — not a partial list — if
-     * there are no legs at all, or any single one fails to resolve.
-     * service_types passes through unvalidated (see resolveServiceTypes).
+     * Resolves every extracted leg to a real Airport pair, in order.
+     * Departure/arrival are resolved too where parseable, but a missing or
+     * unparseable one leaves that field null rather than failing the leg —
+     * see the class docblock. Returns null — not a partial list — if there
+     * are no legs at all, any single one's airports fail to resolve, or an
+     * explicit departure/arrival pair doesn't make sense (arrival not after
+     * departure). service_types passes through unvalidated (see
+     * resolveServiceTypes).
      *
      * @param  ExtractedFlightLeg[]  $legs
-     * @return array<int, array{origin: Airport, destination: Airport, departure: Carbon, arrival: Carbon, serviceTypes: string[]}>|null
+     * @return array<int, array{origin: Airport, destination: Airport, departure: ?Carbon, arrival: ?Carbon, serviceTypes: string[]}>|null
      */
     private function resolveLegs(array $legs): ?array
     {
@@ -125,10 +136,15 @@ class CreateFlightRequestFromExtraction
         foreach ($legs as $leg) {
             $origin = $this->resolveAirport($leg->originAirportCode);
             $destination = $this->resolveAirport($leg->destinationAirportCode);
+
+            if ($origin === null || $destination === null) {
+                return null;
+            }
+
             $departure = $this->parseDate($leg->departureAt);
             $arrival = $this->parseDate($leg->arrivalAt);
 
-            if ($origin === null || $destination === null || $departure === null || $arrival === null || ! $arrival->isAfter($departure)) {
+            if ($departure !== null && $arrival !== null && ! $arrival->isAfter($departure)) {
                 return null;
             }
 

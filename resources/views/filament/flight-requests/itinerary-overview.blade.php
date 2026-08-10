@@ -6,7 +6,7 @@
                     Leg {{ $leg->sequence }}: {{ $leg->originAirport->icao_code }} &rarr; {{ $leg->destinationAirport->icao_code }}
                 </x-slot>
                 <x-slot name="description">
-                    Departs {{ $leg->departure_at->toDayDateTimeString() }} &middot; Arrives {{ $leg->arrival_at->toDayDateTimeString() }}
+                    Departs {{ $leg->departure_at?->toDayDateTimeString() ?? 'TBD' }} &middot; Arrives {{ $leg->arrival_at?->toDayDateTimeString() ?? 'TBD' }}
                 </x-slot>
 
                 @if ($leg->services->isEmpty())

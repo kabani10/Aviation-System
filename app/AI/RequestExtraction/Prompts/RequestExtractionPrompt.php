@@ -4,6 +4,7 @@ namespace App\AI\RequestExtraction\Prompts;
 
 use App\Domain\Customers\Models\Customer;
 use App\Domain\Shared\Enums\ServiceType;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
 /**
@@ -54,6 +55,17 @@ class RequestExtractionPrompt
             services for an operator to price and assign a supplier to — not
             a commitment, so guess generously rather than leaving it empty,
             but don't invent services nothing in the email or route suggests.
+
+            You are told the date the email was sent below — use it to resolve
+            relative dates ("tomorrow", "next Tuesday", "the 15th") into exact
+            ISO 8601 datetimes. Never guess a date using any other year or
+            reference point; if the email gives no usable time reference at
+            all for a leg (no relative phrase, no explicit date, nothing),
+            leave departure_at/arrival_at null rather than inventing one —
+            leaving it null is always safer than a wrong flight date. A leg
+            missing only its time is still worth extracting: return every
+            other field you're confident about and leave the date field(s)
+            null, don't drop the whole leg over a missing time.
 
             List anything ambiguous, contradictory, or missing that a human
             should double-check in unclear_points. This is read by an operator
@@ -135,7 +147,7 @@ class RequestExtractionPrompt
     }
 
     /** @param  Collection<int, Customer>  $customers */
-    public function userContent(string $subject, string $body, Collection $customers): string
+    public function userContent(string $subject, string $body, Collection $customers, Carbon $referenceDate): string
     {
         $context = $customers->take(self::MAX_CUSTOMERS)->map(function (Customer $customer): string {
             $aircraft = $customer->aircraft
@@ -146,6 +158,8 @@ class RequestExtractionPrompt
         })->implode("\n");
 
         return <<<TEXT
+            This email was sent on {$referenceDate->toDayDateTimeString()} — resolve any relative dates in it against that.
+
             Known customers and their fleets:
             {$context}
 

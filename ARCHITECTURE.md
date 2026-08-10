@@ -340,13 +340,34 @@ computed per row) — a flight's own "departure" is its first leg's, for a multi
 
 **AI request extraction parses every leg an email describes, not just the first** — `legs` in
 `RequestExtractionPrompt::tool()` is an array, not a single origin/destination pair, and
-`CreateFlightRequestFromExtraction::resolveLegs()` resolves each one to a real `Airport` pair and a
-valid departure/arrival before creating any `FlightLeg` rows. One unresolved leg — a code the model
-wasn't confident about, a missing date — fails the *whole* extraction, same all-or-nothing reasoning
-as an unmatched customer or aircraft: a flight silently missing its second leg isn't a draft worth
+`CreateFlightRequestFromExtraction::resolveLegs()` resolves each one to a real `Airport` pair before
+creating any `FlightLeg` rows. One unresolved *route* — a code the model wasn't confident about, no
+destination at all — fails the *whole* extraction, same all-or-nothing reasoning as an unmatched
+customer or aircraft: a flight silently missing its second leg's route isn't a draft worth
 auto-creating, so it falls back to the stashed-metadata path instead like any other low-confidence
 extraction. `ExtractedFlightRequest::$legs` is `ExtractedFlightLeg[]`, not a raw array, for the same
 reason the rest of this DTO is typed rather than passing `$input` straight through.
+
+**A leg's departure/arrival times are deliberately *not* part of that all-or-nothing gate — only the
+route is.** `flight_legs.departure_at`/`arrival_at` are nullable (see the
+`make_flight_legs_departure_and_arrival_nullable` migration); an email that clearly identifies the
+customer, aircraft, and route but only says "departing tomorrow" with no arrival time at all is still
+a real, actionable request worth creating, just one with a gap — not something to silently park as an
+unlinked `Communication` the way a genuinely unresolvable request is. `resolveLegs()` still rejects a
+leg whose *explicit* dates don't make sense (arrival not after departure — that's wrong, not missing),
+but a null/unparseable time is left null on the `FlightLeg` and picked up by `CheckMissingInformation`
+instead (`legs.{id}.departure_at`/`arrival_at` findings), the same way a missing passenger count
+already is. The itinerary widget and `LegsRelationManager` table both render a null time as "TBD"
+rather than erroring.
+
+This gate found a real gap during manual testing: the prompt had no way to resolve "tomorrow" into an
+actual date, so the model either correctly left it null or — inconsistently, across otherwise-identical
+calls — guessed a plausible-looking but *wrong* one (a past year, nowhere near the email's real send
+date). `RequestExtractionPrompt::userContent()` now takes a `referenceDate` (`RequestExtractor` passes
+`$communication->occurred_at`, the email's actual sent date, not `now()` — this must resolve correctly
+even when the extraction job runs long after the email arrived) and the system prompt is explicit:
+resolve relative dates against it, but if there's no usable time reference in the email at all, leave
+the field null rather than inventing one — "leaving it null is always safer than a wrong flight date."
 
 **Each leg's guessed `service_types` become real, draft `Service` rows — status `NotStarted`, no
 supplier or price, exactly what an operator adding one by hand leaves blank.** This is a deliberate
@@ -386,6 +407,20 @@ than pointing an iframe at a Mailpit that doesn't exist outside local dev. Delib
 *entire* inbox, not just this flight's own emails (`Communication`'s `EmailOut` entries already cover
 that, on the Communications tab) — Mailpit is the "did this actually leave the app correctly" check,
 a different question than "what's the correspondence history for this flight."
+
+**Filament panels serve their own prebuilt CSS bundle — they never re-scan the app's own Blade
+partials for Tailwind classes.** This surfaced as a real bug: the Mailpit panel's positioning classes
+(`right-0`, `fixed`, etc.) simply didn't exist in any stylesheet the panel actually loaded, so the
+panel rendered in the wrong place in a real browser despite every Pest test passing — those tests only
+assert on HTML text/structure, not computed CSS, and this project's own `resources/css/app.css` (the
+Tailwind entry that scans `resources/views/**`) is wired into `welcome.blade.php` only, never into the
+`admin` panel. `resources/css/filament-extras.css` is a second, tiny entry point — Tailwind v4's
+`theme.css`/`utilities.css` layers only, deliberately skipping `preflight.css` so it can't reset
+Filament's own base element styles — scoped via `@source` to `resources/views/filament`, loaded
+panel-wide through a `HEAD_END` render hook in `AdminPanelProvider`. Registered in `vite.config.js`'s
+`input` array alongside the app's main entry. Any future custom Filament view (a widget, another
+render-hook partial) that reaches for a Tailwind utility not already used by Filament's own UI needs
+nothing extra — it's covered by this same stylesheet, not a per-view opt-in.
 
 ## Service Management
 

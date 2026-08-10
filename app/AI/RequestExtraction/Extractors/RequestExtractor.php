@@ -34,6 +34,7 @@ class RequestExtractor
                     subject: (string) $communication->subject,
                     body: (string) $communication->body,
                     customers: $customers,
+                    referenceDate: $communication->occurred_at ?? now(),
                 ),
             ]],
             tools: [$this->prompt->tool()],

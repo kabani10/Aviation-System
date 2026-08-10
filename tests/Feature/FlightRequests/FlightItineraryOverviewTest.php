@@ -48,6 +48,20 @@ it('shows each leg and its own services on the flight overview', function () {
         ->assertSee('Supplier request sent');
 });
 
+it('shows TBD instead of a date for a leg missing its departure or arrival time', function () {
+    $company = Company::factory()->create();
+    $admin = adminFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    $flightRequest->legs()->first()->update(['departure_at' => null, 'arrival_at' => null]);
+
+    Livewire::actingAs($admin)
+        ->test(ViewFlightRequest::class, ['record' => $flightRequest->getRouteKey()])
+        ->assertSee('Departs TBD')
+        ->assertSee('Arrives TBD');
+});
+
 it('says so when a leg has no services yet', function () {
     $company = Company::factory()->create();
     $admin = adminFor($company);

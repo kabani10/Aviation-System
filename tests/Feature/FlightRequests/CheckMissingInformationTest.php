@@ -34,6 +34,31 @@ it('flags missing passenger count, crew count, and customer billing email', func
     expect($findings->pluck('field'))->toContain('passenger_count', 'crew_count', 'customer.billing_email');
 });
 
+it('flags a leg with a missing departure or arrival time', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    $leg = $flightRequest->legs()->first();
+    $leg->update(['departure_at' => null, 'arrival_at' => null]);
+
+    $findings = app(CheckMissingInformation::class)($flightRequest);
+
+    expect($findings->pluck('field'))->toContain("legs.{$leg->id}.departure_at", "legs.{$leg->id}.arrival_at");
+});
+
+it('does not flag a leg that has both departure and arrival times', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    $leg = $flightRequest->legs()->first();
+
+    $findings = app(CheckMissingInformation::class)($flightRequest);
+
+    expect($findings->pluck('field'))->not->toContain("legs.{$leg->id}.departure_at", "legs.{$leg->id}.arrival_at");
+});
+
 it('flags an expired document on the aircraft', function () {
     $company = Company::factory()->create();
     app(CurrentCompany::class)->set($company->id);
