@@ -5,10 +5,12 @@ namespace App\Filament\Resources\FlightRequests;
 use App\Domain\Aircraft\Models\Aircraft;
 use App\Domain\FlightRequests\Enums\FlightStatus;
 use App\Domain\FlightRequests\Models\FlightRequest;
+use App\Domain\ReferenceData\Models\Airport;
 use App\Filament\RelationManagers\CommunicationsRelationManager;
 use App\Filament\RelationManagers\DocumentsRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\InvoicesRelationManager;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\LegsRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\QuotationsRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\ServicesRelationManager;
 use Closure;
@@ -24,6 +26,7 @@ use Filament\Tables\Actions\ViewAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 /**
  * The central record — see ARCHITECTURE.md "Flight Requests". Everyone
@@ -82,30 +85,44 @@ class FlightRequestResource extends Resource
             TextInput::make('callsign')
                 ->maxLength(255),
 
+            // Route/timing aren't columns on FlightRequest anymore — they
+            // belong to its first FlightLeg (see CreateFlightRequest, which
+            // splits this data on save). Shown only while creating, as a
+            // convenience for the common one-leg case; editing an existing
+            // flight's route (or adding a second leg) happens on the Legs
+            // tab instead, where "which leg" is unambiguous. Plain ->options()
+            // rather than ->relationship() — this field has no matching
+            // relation on FlightRequest itself to bind to.
             Select::make('origin_airport_id')
                 ->label('Origin')
-                ->relationship('originAirport', 'icao_code')
-                ->getOptionLabelFromRecordUsing(fn ($record): string => $record->displayLabel())
+                ->options(fn (): array => Airport::query()->pluck('icao_code', 'id')->all())
                 ->required()
                 ->searchable()
-                ->preload(),
+                ->preload()
+                ->visible(fn (string $operation): bool => $operation === 'create')
+                ->dehydrated(fn (string $operation): bool => $operation === 'create'),
 
             Select::make('destination_airport_id')
                 ->label('Destination')
-                ->relationship('destinationAirport', 'icao_code')
-                ->getOptionLabelFromRecordUsing(fn ($record): string => $record->displayLabel())
+                ->options(fn (): array => Airport::query()->pluck('icao_code', 'id')->all())
                 ->required()
                 ->searchable()
-                ->preload(),
+                ->preload()
+                ->visible(fn (string $operation): bool => $operation === 'create')
+                ->dehydrated(fn (string $operation): bool => $operation === 'create'),
 
             DateTimePicker::make('departure_at')
                 ->required()
-                ->native(false),
+                ->native(false)
+                ->visible(fn (string $operation): bool => $operation === 'create')
+                ->dehydrated(fn (string $operation): bool => $operation === 'create'),
 
             DateTimePicker::make('arrival_at')
                 ->required()
                 ->native(false)
-                ->after('departure_at'),
+                ->after('departure_at')
+                ->visible(fn (string $operation): bool => $operation === 'create')
+                ->dehydrated(fn (string $operation): bool => $operation === 'create'),
 
             TextInput::make('passenger_count')
                 ->label('Passengers')
@@ -144,14 +161,20 @@ class FlightRequestResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            // legs_min_departure_at: a flight's own "departure" is its
+            // earliest leg's, for sorting — a real aggregated column via
+            // withMin, not computed per-row, so it stays sortable.
+            ->modifyQueryUsing(fn (Builder $query): Builder => $query
+                ->withMin('legs', 'departure_at')
+                ->with(['legs.originAirport', 'legs.destinationAirport']))
             ->columns([
                 TextColumn::make('callsign')->searchable()->placeholder('—'),
                 TextColumn::make('customer.name')->searchable(),
                 TextColumn::make('aircraft.registration')->label('Aircraft'),
                 TextColumn::make('route')
                     ->label('Route')
-                    ->state(fn (FlightRequest $record): string => "{$record->originAirport->icao_code} → {$record->destinationAirport->icao_code}"),
-                TextColumn::make('departure_at')->dateTime()->sortable(),
+                    ->state(fn (FlightRequest $record): string => $record->routeLabel()),
+                TextColumn::make('legs_min_departure_at')->label('Departure')->dateTime()->sortable(),
                 TextColumn::make('status')
                     ->badge()
                     ->formatStateUsing(fn (FlightStatus $state): string => $state->label())
@@ -163,7 +186,7 @@ class FlightRequestResource extends Resource
                 TextColumn::make('assignedUsers.name')->label('Assigned to')->listWithLineBreaks()->limitList(2),
                 TextColumn::make('services_count')->label('Services')->counts('services'),
             ])
-            ->defaultSort('departure_at', 'desc')
+            ->defaultSort('legs_min_departure_at', 'desc')
             ->filters([
                 SelectFilter::make('status')
                     ->options(collect(FlightStatus::cases())->mapWithKeys(fn ($case) => [$case->value => $case->label()])),
@@ -177,6 +200,7 @@ class FlightRequestResource extends Resource
     public static function getRelations(): array
     {
         return [
+            LegsRelationManager::class,
             ServicesRelationManager::class,
             QuotationsRelationManager::class,
             InvoicesRelationManager::class,

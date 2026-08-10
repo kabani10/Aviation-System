@@ -4,6 +4,7 @@ namespace App\Domain\Services\Models;
 
 use App\Domain\Communications\Concerns\HasCommunications;
 use App\Domain\Documents\Concerns\HasDocuments;
+use App\Domain\FlightRequests\Models\FlightLeg;
 use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\Services\Enums\ServiceStatus;
 use App\Domain\Shared\Concerns\BelongsToCompany;
@@ -17,6 +18,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * One line item on a flight — ground handling, fuel, a landing permit.
+ * Belongs to a specific FlightLeg (which leg needs this), not just the
+ * FlightRequest as a whole — ground handling at a layover airport is a
+ * different supplier/cost/confirmation than at the destination. Still
+ * keeps flight_request_id too (denormalized from the leg, set once at
+ * creation and never reassigned): every check and quotation-generation
+ * query that cares about "this flight's services" reads through that
+ * column directly rather than joining through legs, which is the whole
+ * reason it's worth the duplication — see FlightLeg's docblock.
  * "Operational risks" from the original spec isn't a field here: that's
  * CheckOperationalRisks reading deadlines/confirmations/etc across
  * services (Phase 8), not something an operator types in manually.
@@ -28,7 +37,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * quote-request/quote-received log — see SendSupplierRequest.
  */
 #[Fillable([
-    'type', 'status', 'responsible_user_id', 'supplier_id', 'cost', 'selling_price',
+    // flight_request_id is here even though FlightRequest::services()->create()
+    // (the usual path — ServicesRelationManager, most tests) auto-fills it via
+    // the relation and never needs it listed. CreateFlightRequestFromExtraction
+    // creates through the leg's relation instead (auto-fills flight_leg_id, not
+    // flight_request_id), so the denormalized column has to be mass-assignable
+    // to be set explicitly there.
+    'flight_request_id', 'flight_leg_id', 'type', 'status', 'responsible_user_id', 'supplier_id', 'cost', 'selling_price',
     'quote_requested_at', 'quote_received_at', 'supplier_confirmed_at', 'deadline', 'notes',
 ])]
 class Service extends Model
@@ -52,6 +67,11 @@ class Service extends Model
     public function flightRequest(): BelongsTo
     {
         return $this->belongsTo(FlightRequest::class);
+    }
+
+    public function flightLeg(): BelongsTo
+    {
+        return $this->belongsTo(FlightLeg::class);
     }
 
     public function responsibleUser(): BelongsTo

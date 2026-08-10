@@ -3,6 +3,7 @@
 namespace App\AI\RequestExtraction\Prompts;
 
 use App\Domain\Customers\Models\Customer;
+use App\Domain\Shared\Enums\ServiceType;
 use Illuminate\Support\Collection;
 
 /**
@@ -32,9 +33,27 @@ class RequestExtractionPrompt
             company name, an exact registration) — leave them null rather than
             guessing. aircraft_id must belong to the matched customer_id.
 
-            For origin_airport_code and destination_airport_code, extract the
-            ICAO or IATA code as written in the email — do not invent a code
-            from a city name you are not certain about.
+            The trip may have more than one leg — a stopover described as "X to
+            Y, then Y to Z" is two legs, not one. Extract every leg described,
+            in travel order, into the legs array. The common case is a single
+            leg; only produce more when the email genuinely describes a
+            multi-stop itinerary. For each leg's origin_airport_code and
+            destination_airport_code, extract the ICAO or IATA code as written
+            in the email — do not invent a code from a city name you are not
+            certain about.
+
+            For each leg, also guess which services it will need
+            (service_types) — this is a genuine guess, not something that
+            needs to be stated outright in the email. Ground handling is
+            needed at almost every stop an aircraft actually lands at, so
+            include it by default; add fuel, catering, permits, or others
+            only when the email or the nature of the trip actually implies
+            them (an international border crossing usually needs permits; a
+            long trip often needs fuel; a VIP or head-of-state trip needs
+            vip_handling and security). This produces draft, unconfirmed
+            services for an operator to price and assign a supplier to — not
+            a commitment, so guess generously rather than leaving it empty,
+            but don't invent services nothing in the email or route suggests.
 
             List anything ambiguous, contradictory, or missing that a human
             should double-check in unclear_points. This is read by an operator
@@ -60,21 +79,39 @@ class RequestExtractionPrompt
                         'description' => "Matched aircraft id from the matched customer's fleet, or null.",
                     ],
                     'callsign' => ['type' => ['string', 'null']],
-                    'origin_airport_code' => [
-                        'type' => ['string', 'null'],
-                        'description' => 'ICAO or IATA code as written in the email.',
-                    ],
-                    'destination_airport_code' => [
-                        'type' => ['string', 'null'],
-                        'description' => 'ICAO or IATA code as written in the email.',
-                    ],
-                    'departure_at' => [
-                        'type' => ['string', 'null'],
-                        'description' => 'ISO 8601 datetime, best interpretation of the stated departure time.',
-                    ],
-                    'arrival_at' => [
-                        'type' => ['string', 'null'],
-                        'description' => 'ISO 8601 datetime, best interpretation of the stated arrival time.',
+                    'legs' => [
+                        'type' => 'array',
+                        'description' => 'Every leg of the trip, in travel order. Almost always a single entry; more only for a genuine multi-stop itinerary (e.g. "DXB to IST, then IST to CDG").',
+                        'items' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'origin_airport_code' => [
+                                    'type' => ['string', 'null'],
+                                    'description' => 'ICAO or IATA code as written in the email.',
+                                ],
+                                'destination_airport_code' => [
+                                    'type' => ['string', 'null'],
+                                    'description' => 'ICAO or IATA code as written in the email.',
+                                ],
+                                'departure_at' => [
+                                    'type' => ['string', 'null'],
+                                    'description' => 'ISO 8601 datetime, best interpretation of the stated departure time for this leg.',
+                                ],
+                                'arrival_at' => [
+                                    'type' => ['string', 'null'],
+                                    'description' => 'ISO 8601 datetime, best interpretation of the stated arrival time for this leg.',
+                                ],
+                                'service_types' => [
+                                    'type' => 'array',
+                                    'description' => 'Guessed service types this leg will need — see the system prompt. May be empty if genuinely nothing is implied.',
+                                    'items' => [
+                                        'type' => 'string',
+                                        'enum' => collect(ServiceType::cases())->map->value->all(),
+                                    ],
+                                ],
+                            ],
+                            'required' => ['origin_airport_code', 'destination_airport_code', 'departure_at', 'arrival_at', 'service_types'],
+                        ],
                     ],
                     'passenger_count' => ['type' => ['integer', 'null']],
                     'crew_count' => ['type' => ['integer', 'null']],
@@ -90,8 +127,7 @@ class RequestExtractionPrompt
                     ],
                 ],
                 'required' => [
-                    'customer_id', 'aircraft_id', 'callsign', 'origin_airport_code', 'destination_airport_code',
-                    'departure_at', 'arrival_at', 'passenger_count', 'crew_count',
+                    'customer_id', 'aircraft_id', 'callsign', 'legs', 'passenger_count', 'crew_count',
                     'requested_services_summary', 'special_instructions', 'unclear_points',
                 ],
             ],

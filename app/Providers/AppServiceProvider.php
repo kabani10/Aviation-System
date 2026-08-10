@@ -11,7 +11,9 @@ use App\Domain\Customers\Policies\CustomerContactPolicy;
 use App\Domain\Customers\Policies\CustomerPolicy;
 use App\Domain\Finance\Models\Invoice;
 use App\Domain\Finance\Policies\InvoicePolicy;
+use App\Domain\FlightRequests\Models\FlightLeg;
 use App\Domain\FlightRequests\Models\FlightRequest;
+use App\Domain\FlightRequests\Policies\FlightLegPolicy;
 use App\Domain\FlightRequests\Policies\FlightRequestPolicy;
 use App\Domain\Quotations\Models\Quotation;
 use App\Domain\Quotations\Policies\QuotationPolicy;
@@ -58,6 +60,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Supplier::class, SupplierPolicy::class);
         Gate::policy(SupplierContact::class, SupplierContactPolicy::class);
         Gate::policy(FlightRequest::class, FlightRequestPolicy::class);
+        Gate::policy(FlightLeg::class, FlightLegPolicy::class);
         Gate::policy(Service::class, ServicePolicy::class);
         Gate::policy(Quotation::class, QuotationPolicy::class);
         Gate::policy(Invoice::class, InvoicePolicy::class);

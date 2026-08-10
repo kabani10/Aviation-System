@@ -1,0 +1,14 @@
+/*
+ * Filament panels serve their own prebuilt CSS bundle (vendor/filament/filament's
+ * theme) — it never scans our app's custom Blade partials (widgets, render-hook
+ * views), so Tailwind utility classes used there are never generated anywhere.
+ * This is a second, tiny stylesheet — utilities only, no preflight — loaded
+ * alongside Filament's own CSS via a HEAD_END render hook, scoped to just our
+ * custom filament views. See ARCHITECTURE.md's "Flight legs" section.
+ */
+@layer theme, utilities;
+
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+@source '../views/filament';

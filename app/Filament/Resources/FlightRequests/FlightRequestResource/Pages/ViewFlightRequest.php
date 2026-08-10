@@ -5,6 +5,7 @@ namespace App\Filament\Resources\FlightRequests\FlightRequestResource\Pages;
 use App\Filament\Resources\FlightRequests\FlightRequestResource;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Concerns\HasFlightExecutionActions;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Concerns\HasFlightRequestReviewActions;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\Widgets\FlightItineraryOverview;
 use Filament\Resources\Pages\ViewRecord;
 
 /**
@@ -27,6 +28,13 @@ class ViewFlightRequest extends ViewRecord
             ...parent::getHeaderActions(),
             ...$this->flightRequestReviewHeaderActions(),
             ...$this->flightExecutionHeaderActions(),
+        ];
+    }
+
+    protected function getHeaderWidgets(): array
+    {
+        return [
+            FlightItineraryOverview::class,
         ];
     }
 }

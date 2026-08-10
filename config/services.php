@@ -28,6 +28,14 @@ return [
         'model' => env('ANTHROPIC_MODEL', 'claude-opus-5'),
     ],
 
+    // Local-dev-only mail catcher (see docker-compose.yml). Null in any
+    // environment that hasn't set it — the flight request page's "Emails"
+    // panel doesn't render at all when this is unset, rather than pointing
+    // at a Mailpit that doesn't exist in production.
+    'mailpit' => [
+        'url' => env('MAILPIT_URL'),
+    ],
+
     'ses' => [
         'key' => env('AWS_ACCESS_KEY_ID'),
         'secret' => env('AWS_SECRET_ACCESS_KEY'),

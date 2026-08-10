@@ -5,8 +5,8 @@ namespace Database\Factories\Domain\FlightRequests\Models;
 use App\Domain\Aircraft\Models\Aircraft;
 use App\Domain\Customers\Models\Customer;
 use App\Domain\FlightRequests\Enums\FlightStatus;
+use App\Domain\FlightRequests\Models\FlightLeg;
 use App\Domain\FlightRequests\Models\FlightRequest;
-use App\Domain\ReferenceData\Models\Airport;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -29,17 +29,10 @@ class FlightRequestFactory extends Factory
         $customer = Customer::factory()->create();
         $aircraft = Aircraft::factory()->for($customer)->create();
 
-        [$origin, $destination] = Airport::query()->inRandomOrder()->take(2)->get();
-        $departure = fake()->dateTimeBetween('+1 day', '+2 weeks');
-
         return [
             'customer_id' => $customer->id,
             'aircraft_id' => $aircraft->id,
             'callsign' => $aircraft->registration,
-            'origin_airport_id' => $origin->id,
-            'destination_airport_id' => $destination->id,
-            'departure_at' => $departure,
-            'arrival_at' => (clone $departure)->modify('+'.fake()->numberBetween(1, 12).' hours'),
             'passenger_count' => fake()->numberBetween(1, 14),
             'crew_count' => fake()->numberBetween(2, 4),
             'status' => FlightStatus::NewRequest,
@@ -48,15 +41,25 @@ class FlightRequestFactory extends Factory
 
     public function configure(): static
     {
-        return $this->afterMaking(function (FlightRequest $flightRequest) {
-            if ($flightRequest->aircraft?->customer_id !== $flightRequest->customer_id) {
-                $flightRequest->aircraft_id = Aircraft::factory()
-                    ->for($flightRequest->customer)
-                    ->create()
-                    ->id;
-            }
+        return $this
+            ->afterMaking(function (FlightRequest $flightRequest) {
+                if ($flightRequest->aircraft?->customer_id !== $flightRequest->customer_id) {
+                    $flightRequest->aircraft_id = Aircraft::factory()
+                        ->for($flightRequest->customer)
+                        ->create()
+                        ->id;
+                }
 
-            $flightRequest->company_id ??= $flightRequest->customer?->company_id;
-        });
+                $flightRequest->company_id ??= $flightRequest->customer?->company_id;
+            })
+            ->afterCreating(function (FlightRequest $flightRequest) {
+                // Every flight has at least one leg in practice — a
+                // factory-made one is no exception, so callers that only
+                // care about the flight itself (most tests) don't have to
+                // build a leg by hand just to get a valid record.
+                if ($flightRequest->legs()->doesntExist()) {
+                    FlightLeg::factory()->for($flightRequest)->create(['sequence' => 1]);
+                }
+            });
     }
 }

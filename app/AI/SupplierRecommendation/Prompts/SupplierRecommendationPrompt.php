@@ -76,6 +76,7 @@ class SupplierRecommendationPrompt
     public function userContent(Service $service, Collection $candidates, Collection $performanceById): string
     {
         $flightRequest = $service->flightRequest;
+        $leg = $service->flightLeg;
 
         $suppliers = $candidates->map(function (Supplier $supplier) use ($performanceById): string {
             $performance = $performanceById->get($supplier->id);
@@ -95,7 +96,7 @@ class SupplierRecommendationPrompt
         return <<<TEXT
             Service: {$service->type->label()}
             Flight: {$flightRequest->displayLabel()}
-            Route: {$flightRequest->originAirport->icao_code} to {$flightRequest->destinationAirport->icao_code}
+            Leg: {$leg->originAirport->icao_code} to {$leg->destinationAirport->icao_code}
             Deadline: {$deadline}
 
             Candidate suppliers:

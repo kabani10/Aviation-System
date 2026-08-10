@@ -10,7 +10,6 @@ use App\Domain\Finance\Models\Invoice;
 use App\Domain\FlightRequests\Enums\FlightStatus;
 use App\Domain\FlightRequests\Enums\RequestSource;
 use App\Domain\Quotations\Models\Quotation;
-use App\Domain\ReferenceData\Models\Airport;
 use App\Domain\Services\Models\Service;
 use App\Domain\Shared\Concerns\BelongsToCompany;
 use App\Models\User;
@@ -20,26 +19,27 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 use Spatie\Activitylog\Models\Concerns\LogsActivity;
 use Spatie\Activitylog\Support\LogOptions;
 
 /**
  * The central record — everyone working an operation opens this one page.
- * Aggregate profitability across services lives on `Quotation` (Phase 10)
- * and `Invoice` (Phase 12), not here — a flight can have zero, one, or
- * several of each over time (a rejected quote superseded by a revised
- * one), so there's no single "the" total to put on this record.
- * Cross-flight financial reporting is `ComputeFinancialSummary` (Phase
- * 12), which aggregates across every flight's invoices rather than living
- * here either. Per-service cost/selling price exist as of Phase 6 (see
- * Service) — `requested_services_summary` stays as the freeform original
- * ask ("handling, fuel, permits...") even after it's broken into real
- * Service records, since it's the customer's own words, not something to
- * overwrite.
+ * Route and timing live on FlightLeg, not here (see FlightLeg's docblock):
+ * every FlightRequest has at least one leg, created together with it, so
+ * there's no "flight with no route yet" state to account for. Aggregate
+ * profitability across services lives on `Quotation` (Phase 10) and
+ * `Invoice` (Phase 12), not here — a flight can have zero, one, or several
+ * of each over time (a rejected quote superseded by a revised one), so
+ * there's no single "the" total to put on this record. Cross-flight
+ * financial reporting is `ComputeFinancialSummary` (Phase 12), which
+ * aggregates across every flight's invoices rather than living here
+ * either. `requested_services_summary` stays as the freeform original ask
+ * ("handling, fuel, permits...") even after it's broken into real Service
+ * records, since it's the customer's own words, not something to overwrite.
  */
 #[Fillable([
-    'customer_id', 'aircraft_id', 'callsign', 'origin_airport_id', 'destination_airport_id',
-    'departure_at', 'arrival_at', 'passenger_count', 'crew_count', 'status',
+    'customer_id', 'aircraft_id', 'callsign', 'passenger_count', 'crew_count', 'status',
     'special_instructions', 'requested_services_summary',
     // source/extraction_metadata are set only by CreateFlightRequestFromExtraction,
     // never a form — see the "mass-assignment protection is about forms,
@@ -57,8 +57,6 @@ class FlightRequest extends Model
         return [
             'status' => FlightStatus::class,
             'source' => RequestSource::class,
-            'departure_at' => 'datetime',
-            'arrival_at' => 'datetime',
             'reviewed_at' => 'datetime',
             'extraction_metadata' => 'array',
             'operation_started_at' => 'datetime',
@@ -76,19 +74,14 @@ class FlightRequest extends Model
         return $this->belongsTo(Aircraft::class);
     }
 
-    public function originAirport(): BelongsTo
-    {
-        return $this->belongsTo(Airport::class, 'origin_airport_id');
-    }
-
-    public function destinationAirport(): BelongsTo
-    {
-        return $this->belongsTo(Airport::class, 'destination_airport_id');
-    }
-
     public function assignedUsers(): BelongsToMany
     {
         return $this->belongsToMany(User::class);
+    }
+
+    public function legs(): HasMany
+    {
+        return $this->hasMany(FlightLeg::class)->orderBy('sequence');
     }
 
     public function services(): HasMany
@@ -106,9 +99,43 @@ class FlightRequest extends Model
         return $this->hasMany(Invoice::class);
     }
 
+    /** The earliest leg's departure — what "when does this flight go" means for a multi-leg trip. */
+    public function earliestDepartureAt(): ?Carbon
+    {
+        return $this->legs->min('departure_at');
+    }
+
+    /**
+     * Chains each leg's origin/destination into one route string —
+     * "DXB-IST-CDG" for a two-leg trip, "KJFK-EGLL" for a one-way, same
+     * format as before legs existed. Doesn't assume legs are contiguous
+     * (a leg's destination not matching the next leg's origin still
+     * produces a readable, if longer, chain).
+     */
+    public function routeLabel(): string
+    {
+        $legs = $this->legs;
+
+        if ($legs->isEmpty()) {
+            return '';
+        }
+
+        $codes = [];
+
+        foreach ($legs as $leg) {
+            if ($codes === [] || end($codes) !== $leg->originAirport->icao_code) {
+                $codes[] = $leg->originAirport->icao_code;
+            }
+
+            $codes[] = $leg->destinationAirport->icao_code;
+        }
+
+        return implode('-', $codes);
+    }
+
     public function displayLabel(): string
     {
-        $route = "{$this->originAirport->icao_code}-{$this->destinationAirport->icao_code}";
+        $route = $this->routeLabel();
 
         return $this->callsign ? "{$this->callsign} ({$route})" : $route;
     }
@@ -122,10 +149,7 @@ class FlightRequest extends Model
     public function getActivitylogOptions(): LogOptions
     {
         return LogOptions::defaults()
-            ->logOnly([
-                'customer_id', 'aircraft_id', 'callsign', 'origin_airport_id', 'destination_airport_id',
-                'departure_at', 'arrival_at', 'passenger_count', 'crew_count', 'status',
-            ])
+            ->logOnly(['customer_id', 'aircraft_id', 'callsign', 'passenger_count', 'crew_count', 'status'])
             ->logOnlyDirty()
             ->dontLogEmptyChanges();
     }

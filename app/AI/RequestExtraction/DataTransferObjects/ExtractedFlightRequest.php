@@ -8,12 +8,15 @@ namespace App\AI\RequestExtraction\DataTransferObjects;
  * resolved to real IDs at this point — Claude is given the tenant's own
  * customers/aircraft as context and asked to match against them directly,
  * rather than returning names for the app to fuzzy-match afterward.
- * origin/destination stay as codes: resolving those to an Airport is a
- * deterministic DB lookup, not something worth asking the model to do.
+ * legs stays as airport codes, not resolved Airport ids: resolving those is
+ * a deterministic DB lookup (CreateFlightRequestFromExtraction), not
+ * something worth asking the model to do. Almost always one entry — see
+ * legs's own description in the tool schema for when it's more.
  */
 final readonly class ExtractedFlightRequest
 {
     /**
+     * @param  ExtractedFlightLeg[]  $legs
      * @param  string[]  $unclearPoints
      * @param  array<string, mixed>  $raw
      */
@@ -21,10 +24,7 @@ final readonly class ExtractedFlightRequest
         public ?int $customerId,
         public ?int $aircraftId,
         public ?string $callsign,
-        public ?string $originAirportCode,
-        public ?string $destinationAirportCode,
-        public ?string $departureAt,
-        public ?string $arrivalAt,
+        public array $legs,
         public ?int $passengerCount,
         public ?int $crewCount,
         public ?string $requestedServicesSummary,
@@ -40,10 +40,10 @@ final readonly class ExtractedFlightRequest
             customerId: $input['customer_id'] ?? null,
             aircraftId: $input['aircraft_id'] ?? null,
             callsign: $input['callsign'] ?? null,
-            originAirportCode: $input['origin_airport_code'] ?? null,
-            destinationAirportCode: $input['destination_airport_code'] ?? null,
-            departureAt: $input['departure_at'] ?? null,
-            arrivalAt: $input['arrival_at'] ?? null,
+            legs: array_map(
+                fn (array $leg): ExtractedFlightLeg => ExtractedFlightLeg::fromToolInput($leg),
+                $input['legs'] ?? [],
+            ),
             passengerCount: $input['passenger_count'] ?? null,
             crewCount: $input['crew_count'] ?? null,
             requestedServicesSummary: $input['requested_services_summary'] ?? null,

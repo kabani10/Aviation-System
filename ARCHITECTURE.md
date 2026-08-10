@@ -242,12 +242,12 @@ Procurement both); this is the first module to actually use them, same permissio
 ## Flight Requests
 
 `App\Domain\FlightRequests\Models\FlightRequest` is the central record from the original spec —
-customer, aircraft, route (`originAirport`/`destinationAirport`, both real `Airport` references),
-times, passenger/crew counts, `FlightStatus`, assigned employees (`assignedUsers`, a plain
-`BelongsToMany` to `User`), plus `HasDocuments`/`HasCommunications` — this is what those two modules
-were built for. `FlightStatus` mirrors the spec's Step 11 lifecycle with one addition: `Cancelled`,
-which the spec covers for individual services but never states for the flight itself — an omission,
-not a deliberate scope line, so it's included.
+customer, aircraft, passenger/crew counts, `FlightStatus`, assigned employees (`assignedUsers`, a
+plain `BelongsToMany` to `User`), plus `HasDocuments`/`HasCommunications` — this is what those two
+modules were built for. Route and timing live on `FlightLeg` instead, not directly on this model —
+see "Flight legs" below. `FlightStatus` mirrors the spec's Step 11 lifecycle with one addition:
+`Cancelled`, which the spec covers for individual services but never states for the flight itself —
+an omission, not a deliberate scope line, so it's included.
 
 **Flight-level costs/selling prices are modeled as of Phase 10** — via `Quotation`, not a column on this
 model; see Quotation below for why a flight can have several totals over time rather than one. Invoicing
@@ -283,11 +283,118 @@ the app's own classes, so it isn't a bug in `BelongsToCompany` or our models. Th
 if a `->for($customer)` override afterward left the pair mismatched. If a future factory needs two
 nested factories of the same model, know this exists before spending an hour re-discovering it.
 
+## Flight legs
+
+`App\Domain\FlightRequests\Models\FlightLeg` is one origin-to-destination hop of a `FlightRequest` —
+`sequence`, `originAirport`/`destinationAirport`, `departure_at`/`arrival_at`. A one-way flight is a
+`FlightRequest` with a single leg, not a separate code path: `FlightRequestFactory` always creates
+one in `afterCreating`, `CreateFlightRequestFromExtraction` always creates one alongside the flight
+it builds, and `CreateFlightRequest` (the Filament create page) collects one leg's worth of route
+fields inline and splits them into a `FlightLeg` on save. There is no "flight with no legs" state
+anywhere in the app.
+
+**Why legs exist at all, not just a route on the flight:** a real trip can be multi-stop —
+DXB-IST then IST-CDG — and ground handling at the Istanbul stopover is a different supplier, cost,
+and confirmation than at the Paris destination. Flattening that onto one services list per flight
+would hide exactly the distinction an operator needs to see. `FlightRequestResource` gets a **Legs**
+tab (`LegsRelationManager`) for managing the itinerary — adding a second leg, fixing a mistake in an
+existing one. Editing an existing flight's route happens there, not on the flight's own edit form,
+which only shows route fields while *creating* (`->visible(fn (string $operation) => $operation ===
+'create')`) — on edit, "which leg" is ambiguous once more than one exists, so it isn't offered inline
+at all.
+
+**`Service` belongs to a `FlightLeg`, not directly to the `FlightRequest`, but keeps
+`flight_request_id` too — a deliberate, documented denormalization, not a drift-prone copy of a
+computed value the way this codebase normally avoids.** `flight_leg_id` is set once at creation and
+never reassigned, so it can't go stale the way a cached total could. Every check and
+quotation-generation query that cares about "this flight's services"
+(`CheckMissingInformation`, `CheckOperationalRisks`, `CheckFlightReadiness`,
+`CreateQuotationFromServices`, `ServicesRelationManager`'s `$relationship = 'services'`) reads
+`FlightRequest::services()` — a plain `HasMany` via `flight_request_id`, unchanged by this phase —
+rather than joining through legs. Keeping that column is what let all of that code, and every
+existing test that builds a `Service` via `->for($flightRequest)`, keep working unmodified. The
+`ServicesRelationManager` create form adds one more required field, `flight_leg_id` (a `Select` of
+this flight's own legs, validated server-side the same "options list isn't the boundary" way
+`aircraft_id` is), plus a `Leg` column and filter on the table — that's the actual "operator sees
+each leg's own requirements" surface.
+
+**`ServiceFactory` and `FlightRequestFactory` both auto-resolve a leg so existing call sites didn't
+need touching.** `Service::factory()->for($flightRequest)` — the pattern used everywhere already —
+reuses the flight's first leg if one exists, or creates one, entirely inside the factory's
+`afterMaking` hook. A caller that genuinely wants a service on a *specific* leg passes
+`flight_leg_id` explicitly and that wins instead.
+
+**Deleting a leg is allowed** (`FlightLegPolicy`), unlike the "no hard delete" convention for
+Service/Customer/etc — a leg is structural, correctable data, not a business record with its own
+history. `LegsRelationManager` still refuses to delete the last remaining leg, or one that already
+has services on it (which would otherwise be silently orphaned) — enforced in the relation manager's
+`DeleteAction` visibility, not the policy, since it's about the state of *this* record, not a
+blanket permission.
+
+**`FlightRequest::displayLabel()`/`routeLabel()` chain every leg's airports into one string** —
+`"KJFK-EGLL"` for a one-way flight (identical output to before legs existed), `"DXB-IST-CDG"` for a
+two-leg trip. Doesn't assume legs are contiguous; a leg's destination not matching the next leg's
+origin still produces a readable chain, just a longer one. The flight list's Departure column sorts
+by the *earliest* leg's departure (`withMin('legs', 'departure_at')`, a real aggregated column, not
+computed per row) — a flight's own "departure" is its first leg's, for a multi-leg trip.
+
+**AI request extraction parses every leg an email describes, not just the first** — `legs` in
+`RequestExtractionPrompt::tool()` is an array, not a single origin/destination pair, and
+`CreateFlightRequestFromExtraction::resolveLegs()` resolves each one to a real `Airport` pair and a
+valid departure/arrival before creating any `FlightLeg` rows. One unresolved leg — a code the model
+wasn't confident about, a missing date — fails the *whole* extraction, same all-or-nothing reasoning
+as an unmatched customer or aircraft: a flight silently missing its second leg isn't a draft worth
+auto-creating, so it falls back to the stashed-metadata path instead like any other low-confidence
+extraction. `ExtractedFlightRequest::$legs` is `ExtractedFlightLeg[]`, not a raw array, for the same
+reason the rest of this DTO is typed rather than passing `$input` straight through.
+
+**Each leg's guessed `service_types` become real, draft `Service` rows — status `NotStarted`, no
+supplier or price, exactly what an operator adding one by hand leaves blank.** This is a deliberate
+step past "just extract what's stated": the prompt tells Claude to *guess* which services a leg
+needs (ground handling by default for any leg that actually lands somewhere; fuel/permits/catering/
+etc. only when the email or the nature of the trip implies them), not only transcribe an explicit
+list. Unlike every other extracted field, an empty or unrecognized `service_types` never affects
+confidence — `CreateFlightRequestFromExtraction::resolveServiceTypes()` just filters out anything
+that doesn't map to a real `ServiceType` case (`ServiceType::tryFrom()`, not `from()` — a model
+hallucinating a category it wasn't given shouldn't be able to throw) and creates however many
+services survive, including zero. A flight with a route the model is confident about but no sensible
+service guess is still worth auto-creating; a plausible-looking but nonsense service type is worth
+silently dropping, not worth failing the extraction over.
+
+**Not built:** `FlightLeg` has no `LogsActivity` (same as `Service`, which sits at the same
+granularity) and no document/communication attachment of its own.
+
+**Two read-only additions make "which leg needs what" visible without clicking into a filtered
+table:** `FlightItineraryOverview` (a page widget, not a `RelationManager` — it needs no create/edit
+capability of its own, both tabs below it already cover that) renders every leg as its own section
+with that leg's services inline, on both `ViewFlightRequest` and `EditFlightRequest`. It isn't in
+`app/Filament/Widgets` — that folder is auto-discovered onto the Dashboard (see
+`AdminPanelProvider`), and this widget requires a specific `FlightRequest` record it has no business
+rendering without; it's wired in explicitly via each page's `getHeaderWidgets()` instead, which
+Filament auto-passes the current `$record` to (any widget with a public `$record` property gets it
+for free — see `InteractsWithRecord::getWidgetData()`). It also disables Filament's default
+lazy-loading (`$isLazy = false`) — a widget that only loads once scrolled into view is fine for a
+dashboard chart, wrong for the main point of this particular page.
+
+A slide-out **Mailpit panel**, registered as a scoped render hook
+(`AdminPanelProvider::renderHook(PanelsRenderHook::BODY_END, ..., scopes: [ViewFlightRequest::class,
+EditFlightRequest::class])`), embeds the local Mailpit inbox in an iframe so an operator can check
+what actually got sent for this flight without leaving the page or alt-tabbing to a separate
+`localhost:8025` tab. Reads `config('services.mailpit.url')` (`MAILPIT_URL` in `.env`,
+`http://127.0.0.1:8025` locally) — the whole panel doesn't render at all when that's unset, rather
+than pointing an iframe at a Mailpit that doesn't exist outside local dev. Deliberately shows the
+*entire* inbox, not just this flight's own emails (`Communication`'s `EmailOut` entries already cover
+that, on the Communications tab) — Mailpit is the "did this actually leave the app correctly" check,
+a different question than "what's the correspondence history for this flight."
+
 ## Service Management
 
 `App\Domain\Services\Models\Service` — one line item on a flight (ground handling, fuel, a landing
-permit), `belongsTo FlightRequest`, `BelongsToCompany` directly (same "a join isn't what CompanyScope
-filters on" reasoning as everywhere else). No standalone `ServiceResource`: unlike Documents/
+permit), `belongsTo FlightRequest` and, as of "Flight legs" above, `belongsTo FlightLeg` too —
+`flight_request_id` is kept as a documented denormalization so this section's description of
+`Service` still holds; see that section for why. `BelongsToCompany` directly (same "a join isn't
+what CompanyScope filters on" reasoning as everywhere else). No standalone `ServiceResource`: unlike
+Documents/
 Communications, there's no real "browse every service across every flight" use case in the spec —
 services only make sense in the context of the flight they're on, so `ServicesRelationManager` nested
 under `FlightRequestResource` is the only UI. `ServiceStatus` mirrors the same Step 11 source as
@@ -370,8 +477,10 @@ missing `tool_use` block as a `ClaudeApiException`, not something to unwrap and 
   returns actual database ids rather than names for the app to fuzzy-match afterward. Capped at 200
   customers serialized per call; revisit if a tenant's customer list grows past that.
 - **`RequestExtractor`** calls `ClaudeClient` and turns the tool's `input` into an
-  `ExtractedFlightRequest` DTO. Airport fields stay as ICAO/IATA code *strings* here — resolving a
-  code to an `Airport` row is a deterministic lookup, not something worth asking the model to do.
+  `ExtractedFlightRequest` DTO, whose `legs` is an `ExtractedFlightLeg[]` — almost always one entry,
+  more only for a genuine multi-stop itinerary (see "Flight legs" above). Airport fields stay as
+  ICAO/IATA code *strings* here — resolving a code to an `Airport` row is a deterministic lookup, not
+  something worth asking the model to do.
 - **`ExtractFlightRequestFromEmail`** (a queued job) sets `CurrentCompany` explicitly (same convention
   as every other job — see Multi-tenancy above), calls the extractor, and hands the result to
   `CreateFlightRequestFromExtraction`. A `ClaudeApiException` — no API key configured, Claude declined,
@@ -379,12 +488,12 @@ missing `tool_use` block as a `ClaudeApiException`, not something to unwrap and 
   just doesn't become a draft automatically. This is also why `ANTHROPIC_API_KEY` being blank (the
   `.env.example`/CI default) doesn't break anything — extraction silently no-ops instead of failing
   the request that logged the email in the first place.
-- **`CreateFlightRequestFromExtraction`** is the confidence gate. `flight_requests` has NOT NULL
-  columns for customer/aircraft/both airports/departure/arrival, so a partial extraction can't become
-  a partial `FlightRequest` the way the spec's "AI draft" language might suggest. It's confident only
-  when the customer and aircraft both resolved to real rows (aircraft belonging to that customer),
-  both airport codes matched a real `Airport`, and departure/arrival both parsed with arrival after
-  departure. When confident: creates the `FlightRequest` (`source: Email`, `reviewed_at: null`,
+- **`CreateFlightRequestFromExtraction`** is the confidence gate. It's confident only when the
+  customer and aircraft both resolved to real rows (aircraft belonging to that customer) *and*
+  `resolveLegs()` resolved every extracted leg — both airport codes matched a real `Airport`,
+  departure/arrival both parsed, arrival after departure — for every single leg, not just the first.
+  One bad leg fails the whole extraction; there's no such thing as a `FlightRequest` created with some
+  legs missing. When confident: creates the `FlightRequest` (`source: Email`, `reviewed_at: null`,
   `extraction_metadata` holding the raw tool input for later "why did it fill this in this way"
   debugging) and **moves the Communication onto it** — `communicable_type`/`communicable_id` aren't in
   `Communication`'s `#[Fillable]` list, so this is a direct property assignment + `save()`, not

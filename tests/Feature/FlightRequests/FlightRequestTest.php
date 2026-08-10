@@ -161,11 +161,36 @@ it('builds a readable display label from callsign and route', function () {
     $origin = Airport::where('icao_code', 'KJFK')->first();
     $destination = Airport::where('icao_code', 'EGLL')->first();
 
-    $flightRequest = FlightRequest::factory()->create([
-        'callsign' => 'N650GS',
+    $flightRequest = FlightRequest::factory()->create(['callsign' => 'N650GS']);
+    $flightRequest->legs()->first()->update([
         'origin_airport_id' => $origin->id,
         'destination_airport_id' => $destination->id,
     ]);
 
-    expect($flightRequest->displayLabel())->toBe('N650GS (KJFK-EGLL)');
+    expect($flightRequest->fresh()->displayLabel())->toBe('N650GS (KJFK-EGLL)');
+});
+
+it('chains every leg into the route label for a multi-leg trip', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $dxb = Airport::where('icao_code', 'OMDB')->first();
+    $ist = Airport::where('icao_code', 'LTFM')->first();
+    $cdg = Airport::where('icao_code', 'LFPG')->first();
+
+    $flightRequest = FlightRequest::factory()->create(['callsign' => 'N800MULTI']);
+    $flightRequest->legs()->first()->update([
+        'sequence' => 1,
+        'origin_airport_id' => $dxb->id,
+        'destination_airport_id' => $ist->id,
+    ]);
+    $flightRequest->legs()->create([
+        'sequence' => 2,
+        'origin_airport_id' => $ist->id,
+        'destination_airport_id' => $cdg->id,
+        'departure_at' => now()->addDays(2),
+        'arrival_at' => now()->addDays(2)->addHours(4),
+    ]);
+
+    expect($flightRequest->fresh()->displayLabel())->toBe('N800MULTI (OMDB-LTFM-LFPG)');
 });

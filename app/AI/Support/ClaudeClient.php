@@ -47,7 +47,6 @@ class ClaudeClient
             'system' => $system,
             'messages' => $messages,
             'tools' => $tools ?: null,
-            'output_config' => ['effort' => 'medium'],
         ], fn ($value): bool => $value !== null);
 
         $response = Http::withHeaders([

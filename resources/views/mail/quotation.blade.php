@@ -4,8 +4,13 @@
 
 <ul>
     <li><strong>Flight:</strong> {{ $quotation->flightRequest->displayLabel() }}</li>
-    <li><strong>Route:</strong> {{ $quotation->flightRequest->originAirport->icao_code }} &rarr; {{ $quotation->flightRequest->destinationAirport->icao_code }}</li>
-    <li><strong>Departure:</strong> {{ $quotation->flightRequest->departure_at->toDayDateTimeString() }}</li>
+    @foreach ($quotation->flightRequest->legs as $leg)
+        <li>
+            <strong>Leg {{ $leg->sequence }}:</strong>
+            {{ $leg->originAirport->icao_code }} &rarr; {{ $leg->destinationAirport->icao_code }},
+            departing {{ $leg->departure_at->toDayDateTimeString() }}
+        </li>
+    @endforeach
 </ul>
 
 <table cellpadding="6" cellspacing="0" border="1" style="border-collapse: collapse; width: 100%;">

@@ -9,6 +9,14 @@ use App\Support\Tenancy\CurrentCompany;
 // value here would make these tests pass locally and fail in CI.
 beforeEach(fn () => config(['services.postmark.inbound_secret' => 'test-inbound-secret']));
 
+// Every inbound webhook call here dispatches ExtractFlightRequestFromEmail
+// synchronously (QUEUE_CONNECTION=sync in tests). This test isn't about AI
+// extraction at all, so make sure a real ANTHROPIC_API_KEY sitting in a
+// developer's local .env (not .env.testing) can't turn it into a real,
+// billed network call — same reasoning as RequestExtractionTest's own
+// beforeEach, just defaulting to "off" here instead of "on with a fake key".
+beforeEach(fn () => config(['services.anthropic.key' => null]));
+
 function inboundUrl(Company $company, ?string $token): string
 {
     $query = $token === null ? '' : '?token='.$token;

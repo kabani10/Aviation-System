@@ -4,6 +4,7 @@ namespace App\Filament\Resources\FlightRequests\FlightRequestResource\RelationMa
 
 use App\AI\SupplierRecommendation\Recommenders\SupplierRecommender;
 use App\AI\Support\ClaudeApiException;
+use App\Domain\FlightRequests\Models\FlightLeg;
 use App\Domain\Services\Actions\RecordSupplierQuote;
 use App\Domain\Services\Actions\SendSupplierRequest;
 use App\Domain\Services\Enums\ServiceStatus;
@@ -11,6 +12,7 @@ use App\Domain\Services\Models\Service;
 use App\Domain\Shared\Enums\ServiceType;
 use App\Domain\Suppliers\Models\Supplier;
 use App\Domain\Suppliers\Models\SupplierContact;
+use Closure;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -22,6 +24,7 @@ use Filament\Tables\Actions\Action;
 use Filament\Tables\Actions\CreateAction;
 use Filament\Tables\Actions\EditAction;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Facades\Auth;
@@ -56,6 +59,23 @@ class ServicesRelationManager extends RelationManager
     public function form(Form $form): Form
     {
         return $form->schema([
+            Select::make('flight_leg_id')
+                ->label('Leg')
+                ->options(fn (): array => $this->getOwnerRecord()->legs
+                    ->mapWithKeys(fn (FlightLeg $leg): array => [$leg->id => $leg->displayLabel()])
+                    ->all())
+                ->default(fn (): ?int => $this->getOwnerRecord()->legs->count() === 1 ? $this->getOwnerRecord()->legs->first()->id : null)
+                ->required()
+                ->native(false)
+                // The options list above is a UI convenience, not the
+                // actual boundary — same principle as the aircraft_id
+                // check on FlightRequestResource.
+                ->rule(fn (): Closure => function (string $attribute, $value, Closure $fail): void {
+                    if ($value && ! $this->getOwnerRecord()->legs()->where('id', $value)->exists()) {
+                        $fail('This leg does not belong to this flight.');
+                    }
+                }),
+
             Select::make('type')
                 ->options(collect(ServiceType::cases())->mapWithKeys(fn ($case) => [$case->value => $case->label()]))
                 ->required()
@@ -115,6 +135,11 @@ class ServicesRelationManager extends RelationManager
     {
         return $table
             ->columns([
+                TextColumn::make('flightLeg.sequence')
+                    ->label('Leg')
+                    ->formatStateUsing(fn (Service $record): string => $record->flightLeg
+                        ? "#{$record->flightLeg->sequence}: {$record->flightLeg->originAirport->icao_code}\u{2192}{$record->flightLeg->destinationAirport->icao_code}"
+                        : '—'),
                 TextColumn::make('type')
                     ->formatStateUsing(fn (ServiceType $state): string => $state->label()),
                 TextColumn::make('status')
@@ -135,6 +160,13 @@ class ServicesRelationManager extends RelationManager
                 TextColumn::make('selling_price')
                     ->money('USD')
                     ->visible(fn (): bool => Auth::user()->can('finance.view_prices')),
+            ])
+            ->filters([
+                SelectFilter::make('flight_leg_id')
+                    ->label('Leg')
+                    ->options(fn (): array => $this->getOwnerRecord()->legs
+                        ->mapWithKeys(fn (FlightLeg $leg): array => [$leg->id => $leg->displayLabel()])
+                        ->all()),
             ])
             ->headerActions([
                 CreateAction::make(),
