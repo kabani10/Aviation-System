@@ -186,7 +186,11 @@ class FlightRequestResource extends Resource
                 TextColumn::make('assignedUsers.name')->label('Assigned to')->listWithLineBreaks()->limitList(2),
                 TextColumn::make('services_count')->label('Services')->counts('services'),
             ])
-            ->defaultSort('legs_min_departure_at', 'desc')
+            // Newest request first, not soonest-departing first — an ops
+            // list is triaged by "what just came in", and a departure date
+            // can be null now (see CreateFlightRequestFromExtraction) for a
+            // request that's brand new but has no confirmed time yet.
+            ->defaultSort('created_at', 'desc')
             ->filters([
                 SelectFilter::make('status')
                     ->options(collect(FlightStatus::cases())->mapWithKeys(fn ($case) => [$case->value => $case->label()])),

@@ -52,31 +52,16 @@ it('hides "mark AI draft reviewed" once already reviewed, and for manual request
         ->assertActionHidden('markReviewed');
 });
 
-it('shows the missing information action listing current findings', function () {
+it('no longer offers missing information or operational risks actions on the flight request page', function () {
     $company = Company::factory()->create();
     $sales = salesUserFor($company);
     app(CurrentCompany::class)->set($company->id);
 
     $flightRequest = FlightRequest::factory()->create(['passenger_count' => null]);
-
-    Livewire::actingAs($sales)
-        ->test(ViewFlightRequest::class, ['record' => $flightRequest->getRouteKey()])
-        ->assertActionExists('missingInformation')
-        ->mountAction('missingInformation')
-        ->assertSee('Passenger count is missing.');
-});
-
-it('shows the operational risks action listing current findings', function () {
-    $company = Company::factory()->create();
-    $sales = salesUserFor($company);
-    app(CurrentCompany::class)->set($company->id);
-
-    $flightRequest = FlightRequest::factory()->create();
     Service::factory()->for($flightRequest)->create(['status' => ServiceStatus::AtRisk]);
 
     Livewire::actingAs($sales)
         ->test(ViewFlightRequest::class, ['record' => $flightRequest->getRouteKey()])
-        ->assertActionExists('operationalRisks')
-        ->mountAction('operationalRisks')
-        ->assertSee('is flagged at risk.');
+        ->assertActionDoesNotExist('missingInformation')
+        ->assertActionDoesNotExist('operationalRisks');
 });

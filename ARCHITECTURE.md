@@ -557,16 +557,20 @@ with no supporting documents, a service with no supplier assigned) is a determin
 ambiguity for an LLM to resolve. `app/AI` exists to isolate a specific failure mode — a Claude API
 call can fail, time out, or return something to validate — and there's no such failure mode here, so
 routing it through `AI/*` would just be following the spec's feature *name* instead of what the
-feature actually *needs*. It's exposed as a "Missing information" header action (same trait, opens a
-modal listing findings) rather than computed once and stored, since the answer changes as an operator
-fills in gaps — a stored result would go stale the moment someone adds a passenger count.
+feature actually *needs*. Computed on demand rather than stored, since the answer changes as an
+operator fills in gaps — a stored result would go stale the moment someone adds a passenger count.
+
+**Neither `CheckMissingInformation` nor `CheckOperationalRisks` has a header action on the flight
+request page anymore** — both originally had one (a button opening a modal listing findings, via
+`HasFlightRequestReviewActions`), removed at the user's request since the daily digest
+(`BuildFlightRequestDigest`, see "Notifications & reminders" below) already surfaces the same findings
+without needing a per-flight click. Both domain actions are unchanged and still run there — only the
+on-page button and its modal view are gone; `flightRequestReviewHeaderActions()` now returns just
+"Mark AI draft reviewed".
 
 **Not modeled:** the spec's "insufficient time to obtain a permit" check. That needs a per-country
 permit lead-time model that doesn't exist yet — Suppliers & reference data already deferred
-permit-specific rules for the same reason; this is the same gap surfacing again, not a new one. Also
-not built: a `services_count`-style live "completeness" column on the flight-request list — computing
-`CheckMissingInformation` per row for every row in a list is a real cost that isn't worth taking until
-list sizes actually make it matter; the header action covers "check this one flight" for now.
+permit-specific rules for the same reason; this is the same gap surfacing again, not a new one.
 
 ## Supplier quotes and AI supplier recommendation
 

@@ -7,6 +7,7 @@ use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\ReferenceData\Models\Airport;
 use App\Domain\Tenancy\Models\Company;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages\CreateFlightRequest;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages\ListFlightRequests;
 use App\Models\User;
 use App\Support\Tenancy\CurrentCompany;
 use Livewire\Livewire;
@@ -28,6 +29,22 @@ function makeFlightRequestForm(Customer $customer, Aircraft $aircraft): array
         'status' => FlightStatus::NewRequest->value,
     ];
 }
+
+it('lists flight requests newest-created first, not soonest-departing first', function () {
+    $company = Company::factory()->create();
+    $admin = adminFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $oldestCreatedButSoonestDeparture = FlightRequest::factory()->create(['created_at' => now()->subDays(2)]);
+    $oldestCreatedButSoonestDeparture->legs()->first()->update(['departure_at' => now()->addDay()]);
+
+    $newestCreatedButNoDepartureYet = FlightRequest::factory()->create(['created_at' => now()]);
+    $newestCreatedButNoDepartureYet->legs()->first()->update(['departure_at' => null]);
+
+    Livewire::actingAs($admin)
+        ->test(ListFlightRequests::class)
+        ->assertCanSeeTableRecords([$newestCreatedButNoDepartureYet, $oldestCreatedButSoonestDeparture], inOrder: true);
+});
 
 it('lets Sales create a flight request (the spec-supported permission grant)', function () {
     $company = Company::factory()->create();
