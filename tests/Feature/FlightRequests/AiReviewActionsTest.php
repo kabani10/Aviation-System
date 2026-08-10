@@ -27,6 +27,27 @@ it('offers "mark AI draft reviewed" on an unreviewed AI-sourced flight request',
         ->assertHasNoActionErrors();
 
     expect($flightRequest->fresh()->reviewed_at)->not->toBeNull();
+    expect($flightRequest->fresh()->assignedUsers->pluck('id'))->toContain($sales->id);
+});
+
+it('does not drop an existing assignment when confirming a draft', function () {
+    $company = Company::factory()->create();
+    $sales = salesUserFor($company);
+    $alreadyAssigned = salesUserFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create([
+        'source' => RequestSource::Email,
+        'reviewed_at' => null,
+    ]);
+    $flightRequest->assignedUsers()->attach($alreadyAssigned->id);
+
+    Livewire::actingAs($sales)
+        ->test(EditFlightRequest::class, ['record' => $flightRequest->getRouteKey()])
+        ->callAction('markReviewed')
+        ->assertHasNoActionErrors();
+
+    expect($flightRequest->fresh()->assignedUsers->pluck('id'))->toContain($sales->id, $alreadyAssigned->id);
 });
 
 it('hides "mark AI draft reviewed" once already reviewed, and for manual requests entirely', function () {

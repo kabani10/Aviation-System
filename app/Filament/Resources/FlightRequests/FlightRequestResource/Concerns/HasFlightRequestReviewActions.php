@@ -33,11 +33,17 @@ trait HasFlightRequestReviewActions
                 // Phase 11's execution actions below.
                 ->visible(fn (): bool => Auth::user()->can('flights.manage') && $this->getRecord()->needsReview())
                 ->requiresConfirmation()
-                ->modalDescription('Confirms this AI-drafted flight request has been checked and corrected as needed.')
+                ->modalDescription('Confirms this AI-drafted flight request has been checked and corrected as needed. Assigns it to you.')
                 ->action(function (): void {
                     /** @var FlightRequest $record */
                     $record = $this->getRecord();
                     $record->update(['reviewed_at' => now()]);
+                    // Confirming an AI draft is the moment it becomes "someone's"
+                    // flight request — syncWithoutDetaching so re-confirming
+                    // (not currently reachable, needsReview() hides this after
+                    // the first confirm, but harmless either way) never drops an
+                    // existing assignment.
+                    $record->assignedUsers()->syncWithoutDetaching([Auth::id()]);
                 }),
         ];
     }

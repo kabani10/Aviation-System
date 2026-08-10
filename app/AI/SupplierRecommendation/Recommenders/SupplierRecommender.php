@@ -19,6 +19,16 @@ use Illuminate\Support\Collection;
  * genuinely unstructured part an LLM is well-suited for, unlike the metrics
  * themselves. The operator still picks the supplier by hand afterward, same
  * "AI drafts, human decides" principle as Phase 7's request extraction.
+ *
+ * Candidates are also filtered by the service's leg's airports —
+ * `Supplier::airports()` exists specifically to record where a supplier
+ * actually operates, and recommending one with zero presence at the
+ * relevant airport isn't a judgment call, it's operationally impossible
+ * (see `filterByAirportCoverage()`). Not every supplier has this recorded
+ * yet, though, so the same "missing data isn't a red flag" reasoning that
+ * already applies to a supplier's cost/response-time history applies here
+ * too — a supplier with no airports recorded at all isn't excluded, only
+ * one recorded at *other* airports and not this one.
  */
 class SupplierRecommender
 {
@@ -34,7 +44,10 @@ class SupplierRecommender
         $candidates = Supplier::query()
             ->where('is_active', true)
             ->whereJsonContains('services_offered', $service->type->value)
+            ->with('airports')
             ->get();
+
+        $candidates = $this->filterByAirportCoverage($candidates, $service);
 
         if ($candidates->isEmpty()) {
             return collect();
@@ -71,5 +84,33 @@ class SupplierRecommender
                 rationale: $entry['rationale'] ?? '',
             ))
             ->values();
+    }
+
+    /**
+     * Drops any candidate whose recorded airports don't include this
+     * service's leg's origin or destination — but only when that supplier
+     * has airports recorded at all. A supplier nobody has ever entered
+     * coverage for is a data gap, not evidence they don't operate here.
+     *
+     * @param  Collection<int, Supplier>  $candidates
+     * @return Collection<int, Supplier>
+     */
+    private function filterByAirportCoverage(Collection $candidates, Service $service): Collection
+    {
+        $leg = $service->flightLeg;
+
+        if ($leg === null) {
+            return $candidates;
+        }
+
+        $legAirportIds = [$leg->origin_airport_id, $leg->destination_airport_id];
+
+        return $candidates->filter(function (Supplier $supplier) use ($legAirportIds): bool {
+            if ($supplier->airports->isEmpty()) {
+                return true;
+            }
+
+            return $supplier->airports->pluck('id')->intersect($legAirportIds)->isNotEmpty();
+        })->values();
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers;
 
+use App\AI\SupplierRecommendation\DataTransferObjects\SupplierRecommendation;
 use App\AI\SupplierRecommendation\Recommenders\SupplierRecommender;
 use App\AI\Support\ClaudeApiException;
 use App\Domain\FlightRequests\Models\FlightLeg;
@@ -17,6 +18,7 @@ use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\View as ViewComponent;
 use Filament\Forms\Form;
 use Filament\Forms\Get;
 use Filament\Resources\RelationManagers\RelationManager;
@@ -26,7 +28,7 @@ use Filament\Tables\Actions\EditAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
-use Illuminate\Contracts\View\View;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 
 /**
@@ -55,6 +57,38 @@ class ServicesRelationManager extends RelationManager
     protected static string $relationship = 'services';
 
     protected static ?string $recordTitleAttribute = 'type';
+
+    /** @var array{recommendations: Collection<int, SupplierRecommendation>, error: ?string}|null */
+    private ?array $supplierRecommendationsCache = null;
+
+    private ?int $supplierRecommendationsCacheServiceId = null;
+
+    /**
+     * The "suggest supplier" modal needs this result twice — once to render
+     * the ranked list, once to default the picker to the top pick — and it's
+     * a real API call, not a free lookup, so it's cached per-service for the
+     * request rather than fetched twice for one modal open.
+     *
+     * @return array{recommendations: Collection<int, SupplierRecommendation>, error: ?string}
+     */
+    private function supplierRecommendationsFor(Service $service): array
+    {
+        if ($this->supplierRecommendationsCacheServiceId === $service->id) {
+            return $this->supplierRecommendationsCache;
+        }
+
+        try {
+            $recommendations = app(SupplierRecommender::class)($service);
+            $error = null;
+        } catch (ClaudeApiException $exception) {
+            $recommendations = collect();
+            $error = 'Could not get AI suggestions right now: '.$exception->getMessage();
+        }
+
+        $this->supplierRecommendationsCacheServiceId = $service->id;
+
+        return $this->supplierRecommendationsCache = ['recommendations' => $recommendations, 'error' => $error];
+    }
 
     public function form(Form $form): Form
     {
@@ -217,23 +251,42 @@ class ServicesRelationManager extends RelationManager
                     ->icon('heroicon-o-sparkles')
                     ->visible(fn (): bool => Auth::user()->can('services.manage') && Auth::user()->can('finance.view_costs'))
                     ->modalHeading('Suggested suppliers')
-                    ->modalSubmitAction(false)
-                    ->modalCancelActionLabel('Close')
-                    ->modalContent(function (Service $record): View {
-                        try {
-                            $recommendations = app(SupplierRecommender::class)($record);
-                            $error = null;
-                        } catch (ClaudeApiException $exception) {
-                            $recommendations = collect();
-                            $error = 'Could not get AI suggestions right now: '.$exception->getMessage();
-                        }
+                    ->modalSubmitActionLabel('Save supplier')
+                    // A real form now, not a read-only modal: the AI's ranked
+                    // list is shown for context (via the View component) but
+                    // the actual choice is an ordinary searchable Select,
+                    // defaulted to the AI's top pick — pick a different
+                    // supplier by searching instead of accepting it, or close
+                    // without saving to leave the service untouched.
+                    ->form(function (Service $record): array {
+                        $result = $this->supplierRecommendationsFor($record);
 
-                        return view('filament.flight-requests.supplier-suggestions', [
-                            'recommendations' => $recommendations,
-                            'supplierNames' => Supplier::query()->pluck('name', 'id'),
-                            'error' => $error,
-                        ]);
-                    }),
+                        return [
+                            ViewComponent::make('filament.flight-requests.supplier-suggestions')
+                                ->viewData([
+                                    'recommendations' => $result['recommendations'],
+                                    'supplierNames' => Supplier::query()->pluck('name', 'id'),
+                                    'error' => $result['error'],
+                                ]),
+
+                            Select::make('supplier_id')
+                                ->label('Supplier')
+                                ->searchable()
+                                ->native(false)
+                                ->options(fn (): array => Supplier::query()
+                                    ->where('is_active', true)
+                                    ->whereJsonContains('services_offered', $record->type->value)
+                                    ->pluck('name', 'id')
+                                    ->all())
+                                ->default(fn (): ?int => $result['recommendations']->first()?->supplierId ?? $record->supplier_id)
+                                ->helperText('Pre-filled with the AI\'s top pick, if it found one — search to choose a different supplier instead.')
+                                ->required(),
+                        ];
+                    })
+                    ->action(function (Service $record, array $data): void {
+                        $record->update(['supplier_id' => $data['supplier_id']]);
+                    })
+                    ->successNotificationTitle('Supplier updated'),
             ]);
     }
 }

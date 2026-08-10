@@ -548,7 +548,12 @@ normal source label while that's true, and both `ViewFlightRequest`/`EditFlightR
 shared `HasFlightRequestReviewActions` trait — Filament resource pages don't share a common ancestor
 worth putting this on instead; renamed from `HasAiReviewActions` in Phase 8 once it grew a second
 non-AI action, see below) expose a "Mark AI draft reviewed" header action that only appears while
-`needsReview()` is true.
+`needsReview()` is true. Confirming it also assigns the confirming user
+(`$record->assignedUsers()->syncWithoutDetaching([Auth::id()])`) — the moment an AI draft is reviewed is
+the moment it becomes someone's flight request to work, not just a `NewRequest` sitting unowned in the
+list. `syncWithoutDetaching` rather than a plain `attach`/`sync` so this can never drop an existing
+assignment, even though nothing currently re-runs it after the first confirm (`needsReview()` hides the
+action once `reviewed_at` is set).
 
 **`App\Domain\FlightRequests\Actions\CheckMissingInformation` is plain domain code, not `AI/*`** —
 a deliberate scope call, not an oversight. Every check the spec asks for (missing passenger/crew
@@ -606,15 +611,53 @@ field nobody updates" this was deferred to avoid in the first place.
 
 **`App\AI\SupplierRecommendation\Recommenders\SupplierRecommender` is where this phase's AI actually
 lives**, and it's deliberately narrow: given a `Service`, it gathers active suppliers whose
-`services_offered` includes that service's type, computes each one's `SupplierPerformance`, and asks
+`services_offered` includes that service's type, further narrows to ones whose recorded `airports()`
+cover the service's leg (see below), computes each remaining candidate's `SupplierPerformance`, and asks
 Claude to rank them — weighing the deterministic metrics against each supplier's freeform `notes`. The
 notes are the genuinely unstructured part an LLM is suited for (a formula can't tell "closed for
 renovation last month" from "great to work with" the way reading the sentence can); the metrics
 computation itself doesn't touch the API. Same defensive pattern as `CreateFlightRequestFromExtraction`
 in Phase 7: a recommended `supplier_id` is filtered against the actual candidate list before being
-trusted, since Claude was only *given* real ids, not validated against them. Surfaced as a "Suggest
-supplier" action opening a read-only ranked list with rationale — the operator still picks the supplier
-by hand in the form afterward, same "AI drafts, human decides" principle as request extraction.
+trusted, since Claude was only *given* real ids, not validated against them.
+
+**Candidate suppliers are filtered by airport coverage, not just service type — a later addition once
+`Supplier::airports()` turned out to exist but never actually be read by this class.** Recommending a
+ground handler with zero presence at the flight's airport isn't a judgment call for an LLM to weigh, it's
+operationally impossible, so `SupplierRecommender::filterByAirportCoverage()` excludes any candidate
+whose recorded airports don't include the leg's origin or destination — *but only when that supplier has
+airports recorded at all*. Coverage data isn't populated for every supplier yet, so a supplier with an
+empty `airports()` relation is treated as "not yet recorded", not "confirmed absent", and stays a
+candidate — same reasoning `ComputeSupplierPerformance`'s "no data" already applies to missing cost/
+response-time history. The prompt tells Claude which airports each surviving candidate covers (or that
+none are recorded) so a confirmed match can still be weighed as a stronger signal than an unrecorded one.
+
+**"Suggest supplier" is a real form now, not a read-only list — the AI pre-fills a searchable picker in
+the same modal instead of applying its pick silently.** Built in two steps at the user's direction: first
+"the AI should choose one for him, and the user can change it whenever he wants" (auto-apply the top pick,
+change it via the separate Edit action afterward), then "give me the ability to search for the supplier
+and choose one" — folding the picker into the same modal instead of requiring a second action. The modal's
+`->form()` is a `Filament\Forms\Components\View` (the ranked list + rationale, reused from the first
+version, purely informational) followed by an ordinary searchable `Select::make('supplier_id')`, defaulted
+to the AI's #1 recommendation via `->default()`. Nothing is written until the operator submits — closing
+without saving leaves the service untouched, searching and picking a different supplier before saving
+overrides the AI's default entirely, and a failed AI call (see below) still leaves a working, empty picker
+rather than blocking manual selection. `SupplierRecommender` only runs once per modal open despite being
+needed by both the list and the Select's default — `supplierRecommendationsFor()` caches it per-service on
+the `RelationManager` instance for the request, since it's a real API call, not a free lookup.
+
+**A real bug found via a genuine single-candidate case, not something `Http::fake()` coverage could
+have caught**: with exactly one candidate supplier, Claude (Haiku 4.5, not forced to call the tool — see
+`ClaudeClient`'s docblock on why `tool_choice` is left on `auto`) sometimes responded with a plain-text
+clarifying question ("You've provided one candidate supplier, but typically there would be multiple...")
+instead of calling `recommend_suppliers` at all — which `SupplierRecommender` correctly treats as a
+failure (`ClaudeApiException`), surfacing as "Could not get AI suggestions right now" in the UI. This
+will be common in real data, not an edge case: plenty of airport/service-type combinations only ever
+have one supplier on file. The system prompt now says explicitly that a single candidate is a complete
+answer to rank, not missing information, and that this is a non-interactive call with no way to ask a
+follow-up — confirmed fixed against the real API, not just by reasoning about the wording. Existing
+`Http::fake()`-based tests can't regress-test prompt wording like this (they assert on how the app
+parses a *given* Claude response, not on what a real model actually decides to do with the prompt) —
+verifying prompt changes like this one needs a real API call, done manually, not a new Pest test.
 
 **`App\Domain\FlightRequests\Actions\CheckOperationalRisks` is the spec's "AI Risk Detection", and
 like `CheckMissingInformation` it isn't an `AI/*` class** — every check (a service flagged `AtRisk`, a
