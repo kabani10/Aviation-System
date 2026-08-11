@@ -8,8 +8,10 @@ use App\Domain\ReferenceData\Models\Airport;
 use App\Domain\Tenancy\Models\Company;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages\CreateFlightRequest;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages\ListFlightRequests;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages\ListMyAssignedFlightRequests;
 use App\Models\User;
 use App\Support\Tenancy\CurrentCompany;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Livewire\Livewire;
 
 function makeFlightRequestForm(Customer $customer, Aircraft $aircraft): array
@@ -44,6 +46,107 @@ it('lists flight requests newest-created first, not soonest-departing first', fu
     Livewire::actingAs($admin)
         ->test(ListFlightRequests::class)
         ->assertCanSeeTableRecords([$newestCreatedButNoDepartureYet, $oldestCreatedButSoonestDeparture], inOrder: true);
+});
+
+it('shows every flight request on the "All Requests" page, and only the logged-in user\'s assignments on "My Assigned Requests"', function () {
+    $company = Company::factory()->create();
+    $admin = adminFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $assignedToMe = FlightRequest::factory()->create();
+    $assignedToMe->assignedUsers()->attach($admin);
+
+    $assignedToSomeoneElse = FlightRequest::factory()->create();
+    $assignedToSomeoneElse->assignedUsers()->attach(User::factory()->for($company)->create());
+
+    $unassigned = FlightRequest::factory()->create();
+
+    Livewire::actingAs($admin)
+        ->test(ListFlightRequests::class)
+        ->assertCanSeeTableRecords([$assignedToMe, $assignedToSomeoneElse, $unassigned]);
+
+    Livewire::actingAs($admin)
+        ->test(ListMyAssignedFlightRequests::class)
+        ->assertCanSeeTableRecords([$assignedToMe])
+        ->assertCanNotSeeTableRecords([$assignedToSomeoneElse, $unassigned]);
+});
+
+it('groups the kanban board into every FlightStatus column, in enum order, including empty ones', function () {
+    $company = Company::factory()->create();
+    $admin = adminFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $newRequest = FlightRequest::factory()->create(['status' => FlightStatus::NewRequest]);
+    $confirmed = FlightRequest::factory()->create(['status' => FlightStatus::Confirmed]);
+
+    $columns = Livewire::actingAs($admin)
+        ->test(ListFlightRequests::class)
+        ->instance()
+        ->getKanbanColumns();
+
+    expect(array_keys($columns))->toBe(array_map(fn (FlightStatus $status) => $status->value, FlightStatus::cases()));
+    expect($columns[FlightStatus::NewRequest->value]->pluck('id')->all())->toBe([$newRequest->id]);
+    expect($columns[FlightStatus::Confirmed->value]->pluck('id')->all())->toBe([$confirmed->id]);
+    expect($columns[FlightStatus::Cancelled->value])->toBeEmpty();
+});
+
+it('moves a flight request to a new status when dragged on the kanban board, for a user who can manage flights', function () {
+    $company = Company::factory()->create();
+    $sales = salesUserFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create(['status' => FlightStatus::NewRequest]);
+
+    Livewire::actingAs($sales)
+        ->test(ListFlightRequests::class)
+        ->call('moveFlightRequest', $flightRequest->id, FlightStatus::UnderReview->value);
+
+    expect($flightRequest->fresh()->status)->toBe(FlightStatus::UnderReview);
+});
+
+it('blocks moving a flight request on the kanban board for a user who cannot manage flights', function () {
+    $company = Company::factory()->create();
+    $procurement = userWithRoleFor($company, 'Procurement');
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create(['status' => FlightStatus::NewRequest]);
+
+    Livewire::actingAs($procurement)
+        ->test(ListFlightRequests::class)
+        ->call('moveFlightRequest', $flightRequest->id, FlightStatus::UnderReview->value)
+        ->assertForbidden();
+
+    expect($flightRequest->fresh()->status)->toBe(FlightStatus::NewRequest);
+});
+
+it('rejects an invalid status value passed to moveFlightRequest', function () {
+    $company = Company::factory()->create();
+    $sales = salesUserFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create(['status' => FlightStatus::NewRequest]);
+
+    Livewire::actingAs($sales)
+        ->test(ListFlightRequests::class)
+        ->call('moveFlightRequest', $flightRequest->id, 'not-a-real-status')
+        ->assertStatus(422);
+
+    expect($flightRequest->fresh()->status)->toBe(FlightStatus::NewRequest);
+});
+
+it('will not move a flight request via "My Assigned Requests" unless it is assigned to the logged-in user', function () {
+    $company = Company::factory()->create();
+    $sales = salesUserFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $notAssignedToMe = FlightRequest::factory()->create(['status' => FlightStatus::NewRequest]);
+
+    $component = Livewire::actingAs($sales)->test(ListMyAssignedFlightRequests::class);
+
+    expect(fn () => $component->call('moveFlightRequest', $notAssignedToMe->id, FlightStatus::UnderReview->value))
+        ->toThrow(ModelNotFoundException::class);
+
+    expect($notAssignedToMe->fresh()->status)->toBe(FlightStatus::NewRequest);
 });
 
 it('lets Sales create a flight request (the spec-supported permission grant)', function () {

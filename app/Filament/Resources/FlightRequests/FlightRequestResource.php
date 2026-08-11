@@ -20,6 +20,7 @@ use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Form;
 use Filament\Forms\Get;
+use Filament\Navigation\NavigationItem;
 use Filament\Resources\Resource;
 use Filament\Tables\Actions\EditAction;
 use Filament\Tables\Actions\ViewAction;
@@ -27,6 +28,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Auth;
 
 /**
  * The central record — see ARCHITECTURE.md "Flight Requests". Everyone
@@ -43,8 +45,6 @@ class FlightRequestResource extends Resource
     protected static ?string $slug = 'flight-requests';
 
     protected static ?string $navigationIcon = 'heroicon-o-paper-airplane';
-
-    protected static ?string $navigationGroup = 'Operations';
 
     public static function form(Form $form): Form
     {
@@ -217,9 +217,44 @@ class FlightRequestResource extends Resource
     {
         return [
             'index' => Pages\ListFlightRequests::route('/'),
+            // Must come before the '/{record}' wildcard below, same reason
+            // 'create' does — otherwise "assigned" would be parsed as a
+            // record ID.
+            'assigned' => Pages\ListMyAssignedFlightRequests::route('/assigned'),
             'create' => Pages\CreateFlightRequest::route('/create'),
             'view' => Pages\ViewFlightRequest::route('/{record}'),
             'edit' => Pages\EditFlightRequest::route('/{record}/edit'),
+        ];
+    }
+
+    /**
+     * Two sidebar links instead of the single one Filament would otherwise
+     * generate from the index route — "My Assigned Requests" and "All
+     * Requests" are separate pages (see getPages()), grouped together under
+     * their own "Flight Requests" nav section rather than each resource
+     * contributing one flat item to "Operations".
+     */
+    public static function getNavigationItems(): array
+    {
+        return [
+            NavigationItem::make('My Assigned Requests')
+                ->group('Flight Requests')
+                ->icon(static::getNavigationIcon())
+                ->activeIcon(static::getActiveNavigationIcon())
+                ->isActiveWhen(fn (): bool => request()->routeIs(static::getRouteBaseName().'.assigned'))
+                ->badge(fn (): int => FlightRequest::query()
+                    ->whereHas('assignedUsers', fn (Builder $query): Builder => $query->whereKey(Auth::id()))
+                    ->count())
+                ->sort(1)
+                ->url(static::getUrl('assigned')),
+
+            NavigationItem::make('All Requests')
+                ->group('Flight Requests')
+                ->icon(static::getNavigationIcon())
+                ->activeIcon(static::getActiveNavigationIcon())
+                ->isActiveWhen(fn (): bool => request()->routeIs(static::getRouteBaseName().'.index'))
+                ->sort(2)
+                ->url(static::getUrl('index')),
         ];
     }
 }

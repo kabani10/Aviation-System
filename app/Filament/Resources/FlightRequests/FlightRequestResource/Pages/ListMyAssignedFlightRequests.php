@@ -7,17 +7,16 @@ use App\Filament\Resources\FlightRequests\FlightRequestResource;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Concerns\HasFlightRequestBoardView;
 use Filament\Actions;
 use Filament\Resources\Pages\ListRecords;
+use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Auth;
 
 /**
- * The unfiltered listing — every flight request in the company, regardless
- * of who's assigned. Lives at the resource's index route so existing links
- * (breadcrumbs, "back to list" redirects) keep working. Its sibling,
- * ListMyAssignedFlightRequests, is the assignment-scoped view; both are
- * wired into the sidebar as separate pages under a shared "Flight Requests"
- * nav group, see FlightRequestResource::getNavigationItems().
+ * Same table as ListFlightRequests, scoped to flights the logged-in user is
+ * assigned to — its own page/route rather than a tab, per the sidebar
+ * structure in FlightRequestResource::getNavigationItems().
  */
-class ListFlightRequests extends ListRecords
+class ListMyAssignedFlightRequests extends ListRecords
 {
     use HasFlightRequestBoardView;
 
@@ -33,13 +32,26 @@ class ListFlightRequests extends ListRecords
         ];
     }
 
+    public function table(Table $table): Table
+    {
+        return parent::table($table)->modifyQueryUsing(fn (Builder $query): Builder => $this->scopeToAssignedUser($query));
+    }
+
     public function getTitle(): string
     {
-        return 'All Requests';
+        return 'My Assigned Requests';
     }
 
     protected function getKanbanQuery(): Builder
     {
-        return FlightRequest::query();
+        return $this->scopeToAssignedUser(FlightRequest::query());
+    }
+
+    private function scopeToAssignedUser(Builder $query): Builder
+    {
+        return $query->whereHas(
+            'assignedUsers',
+            fn (Builder $query): Builder => $query->whereKey(Auth::id()),
+        );
     }
 }
