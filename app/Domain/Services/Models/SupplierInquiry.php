@@ -30,7 +30,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * HasDocuments. This is also the natural place Phase 16's AI-read supplier
  * replies will match an inbound email against.
  */
-#[Fillable(['service_id', 'supplier_id', 'supplier_contact_id', 'requested_by', 'status', 'cost', 'notes', 'requested_at', 'responded_at'])]
+#[Fillable([
+    'service_id', 'supplier_id', 'supplier_contact_id', 'requested_by', 'status', 'cost', 'notes',
+    'requested_at', 'responded_at',
+    // Phase 17's booking-confirmation round-trip — kept separate from
+    // requested_at/responded_at (the quote cycle) so ComputeSupplierPerformance's
+    // response-time history isn't overwritten by a second, later round-trip.
+    'confirmation_requested_at', 'confirmed_at',
+])]
 class SupplierInquiry extends Model
 {
     use BelongsToCompany, HasCommunications, HasFactory;
@@ -42,6 +49,8 @@ class SupplierInquiry extends Model
             'cost' => 'decimal:2',
             'requested_at' => 'datetime',
             'responded_at' => 'datetime',
+            'confirmation_requested_at' => 'datetime',
+            'confirmed_at' => 'datetime',
         ];
     }
 

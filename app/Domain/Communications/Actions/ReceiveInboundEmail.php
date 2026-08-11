@@ -3,6 +3,7 @@
 namespace App\Domain\Communications\Actions;
 
 use App\AI\RequestExtraction\Jobs\ExtractFlightRequestFromEmail;
+use App\AI\SupplierConfirmationExtraction\Jobs\ExtractSupplierConfirmationFromEmail;
 use App\AI\SupplierReplyExtraction\Jobs\ExtractSupplierReplyFromEmail;
 use App\Domain\Communications\Enums\CommunicationType;
 use App\Domain\Communications\Models\Communication;
@@ -15,14 +16,17 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Turns a Postmark inbound-parse payload into a Communication (and a
- * Document per attachment), then hands off to two independent queued
+ * Document per attachment), then hands off to three independent queued
  * extraction attempts — ExtractFlightRequestFromEmail (is this a new
- * request from a customer) and, as of Phase 16, ExtractSupplierReplyFromEmail
- * (is this a supplier's reply to an open RFQ). Every inbound email still
- * lands on the Company first regardless of which, if either, it turns out
- * to be — each job moves the Communication onto whatever it confidently
- * matched (a FlightRequest or a SupplierInquiry) only once it's sure; see
- * CreateFlightRequestFromExtraction and MatchSupplierReplyToInquiry.
+ * request from a customer), ExtractSupplierReplyFromEmail (Phase 16 — is
+ * this a supplier's reply to an open RFQ), and
+ * ExtractSupplierConfirmationFromEmail (Phase 17 — is this a supplier
+ * confirming a booking we asked them to confirm). Every inbound email
+ * still lands on the Company first regardless of which, if any, it turns
+ * out to be — each job moves the Communication onto whatever it
+ * confidently matched (a FlightRequest or a SupplierInquiry) only once
+ * it's sure; see CreateFlightRequestFromExtraction and
+ * MatchSupplierReplyToInquiry/MatchSupplierConfirmationReplyToInquiry.
  */
 class ReceiveInboundEmail
 {
@@ -53,6 +57,7 @@ class ReceiveInboundEmail
 
         ExtractFlightRequestFromEmail::dispatch($communication);
         ExtractSupplierReplyFromEmail::dispatch($communication);
+        ExtractSupplierConfirmationFromEmail::dispatch($communication);
 
         return $communication;
     }

@@ -2,8 +2,10 @@
 
 namespace App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers;
 
+use App\Domain\Services\Actions\ApplySupplierConfirmation;
 use App\Domain\Services\Actions\ChooseSupplierInquiry;
 use App\Domain\Services\Actions\RecordSupplierInquiryResponse;
+use App\Domain\Services\Actions\SendSupplierConfirmation;
 use App\Domain\Services\Enums\SupplierInquiryStatus;
 use App\Domain\Services\Models\SupplierInquiry;
 use Filament\Forms\Components\Textarea;
@@ -19,13 +21,14 @@ use Illuminate\Support\Facades\Auth;
 /**
  * Every RFQ round-trip across every service on this flight — where the
  * "select multiple suppliers, send inquiries, compare replies" workflow
- * Phase 15 adds actually gets compared and decided. Starting a new inquiry
- * happens on the Services tab instead (see ServicesRelationManager's "Send
- * RFQ" — a per-service action, which is the only place a single service is
- * already in scope to filter AI suggestions by); this tab is the follow-up
- * surface once at least one exists: record what came back, then choose a
- * winner. No CreateAction here for that reason — there's deliberately one
- * entry point for starting an inquiry, not two.
+ * Phase 15 adds actually gets compared and decided, and, as of Phase 17,
+ * where the winning inquiry gets booked and confirmed. Starting a new
+ * inquiry happens on the Services tab instead (see ServicesRelationManager's
+ * "Send RFQ" — a per-service action, which is the only place a single
+ * service is already in scope to filter AI suggestions by); this tab is
+ * everything after that: record what came back, choose a winner, confirm
+ * the booking. No CreateAction here for that reason — there's deliberately
+ * one entry point for starting an inquiry, not two.
  */
 class SupplierInquiriesRelationManager extends RelationManager
 {
@@ -69,6 +72,8 @@ class SupplierInquiriesRelationManager extends RelationManager
                     ->visible(fn (): bool => Auth::user()->can('finance.view_costs')),
                 TextColumn::make('requested_at')->label('Requested')->dateTime()->placeholder('—'),
                 TextColumn::make('responded_at')->label('Responded')->dateTime()->placeholder('—'),
+                TextColumn::make('confirmation_requested_at')->label('Confirmation sent')->dateTime()->placeholder('—')->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('confirmed_at')->label('Confirmed')->dateTime()->placeholder('—')->toggleable(isToggledHiddenByDefault: true),
             ])
             ->actions([
                 Action::make('recordResponse')
@@ -76,7 +81,7 @@ class SupplierInquiriesRelationManager extends RelationManager
                     ->icon('heroicon-o-currency-dollar')
                     ->visible(fn (SupplierInquiry $record): bool => Auth::user()->can('services.manage')
                         && Auth::user()->can('finance.view_costs')
-                        && $record->status !== SupplierInquiryStatus::Chosen)
+                        && in_array($record->status, [SupplierInquiryStatus::Sent, SupplierInquiryStatus::QuoteReceived], strict: true))
                     ->form([
                         TextInput::make('cost')
                             ->numeric()
@@ -100,6 +105,35 @@ class SupplierInquiriesRelationManager extends RelationManager
                     ->modalDescription('Sets this as the service\'s chosen supplier and price. Any other inquiry previously chosen for the same service reverts to "Quote received".')
                     ->action(fn (SupplierInquiry $record) => app(ChooseSupplierInquiry::class)($record))
                     ->successNotificationTitle('Supplier chosen'),
+
+                Action::make('sendConfirmation')
+                    ->label('Send confirmation')
+                    ->icon('heroicon-o-paper-airplane')
+                    ->visible(fn (SupplierInquiry $record): bool => Auth::user()->can('services.manage')
+                        && $record->status === SupplierInquiryStatus::Chosen)
+                    ->form([
+                        Textarea::make('message')
+                            ->label('Additional message (optional)')
+                            ->rows(3),
+                    ])
+                    ->action(fn (SupplierInquiry $record, array $data) => app(SendSupplierConfirmation::class)($record, $data['message'] ?: null, Auth::user()))
+                    ->successNotificationTitle('Confirmation request sent'),
+
+                Action::make('markConfirmed')
+                    ->label('Mark confirmed')
+                    ->icon('heroicon-o-check-badge')
+                    ->color('success')
+                    ->visible(fn (SupplierInquiry $record): bool => Auth::user()->can('services.manage')
+                        && $record->status === SupplierInquiryStatus::Chosen)
+                    ->form([
+                        Textarea::make('notes')
+                            ->label('How was this confirmed? (optional)')
+                            ->rows(2),
+                    ])
+                    ->requiresConfirmation()
+                    ->modalDescription('Marks the supplier as confirmed for this service and updates the flight\'s service status.')
+                    ->action(fn (SupplierInquiry $record, array $data) => app(ApplySupplierConfirmation::class)($record, $data['notes'] ?: null, Auth::user()))
+                    ->successNotificationTitle('Supplier confirmed'),
             ]);
     }
 }

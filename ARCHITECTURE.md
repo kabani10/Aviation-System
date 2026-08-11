@@ -818,6 +818,53 @@ set anything yet. `SupplierInquiryStatus` has no `Declined` case either. Both ar
 (the supplier-order-confirmation step), not a gap in this phase — Phase 16 is deliberately scoped to the
 one structured fact (a price) that's unambiguous to extract and safe to auto-apply.
 
+**Phase 17 closes the workflow's last gap: booking the chosen supplier and confirming they'll actually
+show up, with the same manual-or-AI-detected shape as Phases 15/16.** `SupplierInquiryStatus` gains a
+fourth case, `Confirmed`, after `Chosen` — "did *this* supplier confirm the booking" is squarely about
+one candidate inquiry, not the whole service, so it belongs on the inquiry (unlike `Completed`/
+`Cancelled`, which stay on `Service` since they're about the whole service, not one supplier
+relationship). `supplier_inquiries` gained its own `confirmation_requested_at`/`confirmed_at` pair,
+deliberately separate from `requested_at`/`responded_at` (the quote cycle) — reusing those would erase
+the response-time history `ComputeSupplierPerformance` reads from the RFQ round when a service goes
+through a second round-trip to get booked.
+
+**`SendSupplierConfirmation`** emails the chosen inquiry's contact via a new `SupplierBookingConfirmationMail`
+— referencing the price *they* quoted (`inquiry.cost`, not `Service.selling_price`), same customer/supplier
+financial boundary `SupplierQuoteRequestMail` already draws — and sets `confirmation_requested_at`. Only
+reachable once an inquiry is `Chosen`, same one-entry-point-per-step shape as the rest of this workflow.
+
+**`ApplySupplierConfirmation`** is the actual confirmation — reached manually ("Mark confirmed" on
+`SupplierInquiriesRelationManager`) or automatically (`ExtractSupplierConfirmationFromEmail`). Same
+`$sourceEmail`-or-synthesized-`Communication` dual shape as `RecordSupplierInquiryResponse`. Sets the
+inquiry to `Confirmed` and mirrors it onto `Service`: `supplier_confirmed_at` always gets the timestamp (a
+plain fact, safe to record regardless), but `Service.status` only advances to `Confirmed` when it isn't
+already there or further along (`Completed`/`Cancelled`) — same "only ever move forward, never silently
+rewind real progress" guard `ChooseSupplierInquiry` already uses for the price.
+
+**`MatchSupplierConfirmationReplyToInquiry` and `App\AI\SupplierConfirmationExtraction`** mirror Phase 16's
+matcher/extractor pair exactly, one stage later: the matcher looks for exactly one inquiry that's `Chosen`
+with a confirmation sent but not yet confirmed (rather than `Sent` awaiting a first price), and the tool
+schema is a single `confirmed: boolean` field — true only for an unambiguous "yes, we'll be there", false
+for everything else (a decline, a question, an out-of-office reply). Kept as a genuinely separate matcher
+class from `MatchSupplierReplyToInquiry` rather than a parameter on it: "which open thing is this reply
+about" is a different question at each stage of an inquiry's life, and conflating the two risks matching a
+price reply against a confirmation-stage inquiry or vice versa. `ExtractSupplierConfirmationFromEmail` is
+the third job `ReceiveInboundEmail` now dispatches on every inbound email, alongside the customer-request
+and supplier-price ones — matching first (free), only calling Claude once a genuine single candidate is
+found.
+
+**`CheckOperationalRisks` gained one more finding**, mirroring the existing stale-quote-request check
+exactly but for the confirmation stage: a `Chosen` inquiry whose confirmation was requested more than a
+week ago (`STALE_SUPPLIER_REQUEST_DAYS` — renamed from `STALE_QUOTE_REQUEST_DAYS` now that it covers both
+request types) with no reply yet. Iterates `FlightRequest::supplierInquiries()` (the `hasManyThrough`
+Phase 15 built), same as the existing checks iterate `services()`/`quotations()`/`invoices()`.
+
+**Not modeled:** a `Declined` inquiry status — a supplier's reply that clearly declines rather than
+confirms still just leaves the inquiry `Chosen` with nothing recorded, same "extract only the one safe
+fact, leave everything else for a human" scope discipline Phase 16 established for prices. Worth adding
+once real usage shows operators actually want to distinguish "no reply yet" from "they said no" instead of
+just handling both by picking a different supplier manually.
+
 ## Notifications & reminders
 
 Phases 7 and 8 built three "check something and show it in a modal" actions —
