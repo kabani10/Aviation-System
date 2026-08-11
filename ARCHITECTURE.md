@@ -766,6 +766,58 @@ to anyone with `services.manage` — Operations included, same as `SendSupplierR
 on it. Operations gets a plain searchable supplier picker with no wasted API call, not just the AI panel
 hidden after the fact.
 
+**Phase 16 closes the loop the other direction: a supplier's reply email gets read for a price
+automatically, instead of always needing a manual "Record response".** This is the same
+`app/AI/RequestExtraction`-style split as Phase 7 — a deterministic matching step outside `app/AI`, then
+an actual Claude call inside it — applied to inbound supplier mail instead of inbound customer mail.
+
+**`App\Domain\Services\Actions\MatchSupplierReplyToInquiry` is plain domain code, not `AI/*`** — same
+reasoning as `CheckMissingInformation`: matching an inbound email to the `SupplierInquiry` it's replying
+about is a lookup, not something ambiguous for a model to resolve. It matches the email's `from_address`
+against `SupplierContact.email`, case-insensitively (Postmark's `From` is already a plain address, no
+`"Name <email>"` parsing needed), scoped to the tenant like every other query. **Only returns a match when
+there's exactly one open (`Sent`, not yet responded to) inquiry for that contact** — a contact juggling two
+simultaneous RFQs makes "which one is this reply about" a real ambiguity, and guessing wrong would be
+worse than leaving it for the operator's ordinary "Record response" action, same "leaving it unmatched is
+always safer than guessing" principle `CreateFlightRequestFromExtraction` already applies to dates. This
+match is a free query, so it runs for *every* inbound email before any Claude call — a customer email
+(the overwhelmingly common case) costs nothing beyond that one lookup finding no match.
+
+**`App\AI\SupplierReplyExtraction`** is the AI half, structured exactly like `RequestExtraction`
+(`Prompts`/`Extractors`/`DataTransferObjects`/`Jobs`, no `Actions` subfolder here — there's no
+confidence-gated "create a record" step the way `CreateFlightRequestFromExtraction` has, just a value to
+apply or not):
+
+- **`SupplierReplyExtractionPrompt`** builds a tool schema with a single field, `cost` (number or null) —
+  deliberately the *only* structured field. The system prompt is explicit that `null` means "no clear
+  price stated" and covers every case that should produce it: a clarifying question, a decline, an
+  out-of-office reply, a vague range, a different currency — "an operator would rather see nothing
+  extracted than a wrong price recorded automatically," same reasoning as the leg-date gate in Phase 7.
+- **`SupplierReplyExtractor`** calls `ClaudeClient` with the matched inquiry's service type as context (so
+  the model knows what was actually asked about) and returns an `ExtractedSupplierReply` DTO.
+- **`ExtractSupplierReplyFromEmail`** (a queued job, dispatched by `ReceiveInboundEmail` alongside
+  `ExtractFlightRequestFromEmail` — every inbound email is now tried against both "is this a new request"
+  and "is this a supplier reply") sets `CurrentCompany`, runs the match, and — only once a single open
+  inquiry is found — calls the extractor. A `null` cost or a `ClaudeApiException` both just return early,
+  leaving the inquiry and the Communication exactly where they were (on the `Company`, same as any other
+  unmatched inbound email); nothing is lost, it just doesn't get auto-recorded.
+
+**`RecordSupplierInquiryResponse` gained an optional `$sourceEmail` parameter for this** rather than the
+AI path getting its own duplicate "set these fields" action. When given a `Communication`, it's moved onto
+the inquiry directly (`communicable_type`/`communicable_id` assignment — not in `#[Fillable]`, same
+"a form should never be able to move a Communication to a different subject" reasoning
+`CreateFlightRequestFromExtraction` already established) instead of synthesizing a second, redundant
+"quote received" entry via `LogCommunication` — the real email already says what the supplier quoted, so
+recording it again as a separate paraphrased Communication would just be a second copy of the same
+information. Manual entry (an operator typing in what came back by phone) has no email to move, so it
+keeps synthesizing one, unchanged from Phase 15 — "whether the quote actually arrived by email or was
+recorded from a phone call, the timeline records it as received either way."
+
+**Not modeled:** confirmation detection — a supplier's reply saying "confirmed, we'll be there" doesn't
+set anything yet. `SupplierInquiryStatus` has no `Declined` case either. Both are Phase 17's territory
+(the supplier-order-confirmation step), not a gap in this phase — Phase 16 is deliberately scoped to the
+one structured fact (a price) that's unambiguous to extract and safe to auto-apply.
+
 ## Notifications & reminders
 
 Phases 7 and 8 built three "check something and show it in a modal" actions —

@@ -3,6 +3,7 @@
 namespace App\Domain\Communications\Actions;
 
 use App\AI\RequestExtraction\Jobs\ExtractFlightRequestFromEmail;
+use App\AI\SupplierReplyExtraction\Jobs\ExtractSupplierReplyFromEmail;
 use App\Domain\Communications\Enums\CommunicationType;
 use App\Domain\Communications\Models\Communication;
 use App\Domain\Documents\Actions\UploadDocument;
@@ -14,11 +15,14 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Turns a Postmark inbound-parse payload into a Communication (and a
- * Document per attachment), then hands off to AI request extraction
- * (ExtractFlightRequestFromEmail) to try to turn it into a draft
- * FlightRequest. Every inbound email still lands on the Company first —
- * extraction runs on the queue and, when confident, moves the Communication
- * onto the FlightRequest it created; see CreateFlightRequestFromExtraction.
+ * Document per attachment), then hands off to two independent queued
+ * extraction attempts — ExtractFlightRequestFromEmail (is this a new
+ * request from a customer) and, as of Phase 16, ExtractSupplierReplyFromEmail
+ * (is this a supplier's reply to an open RFQ). Every inbound email still
+ * lands on the Company first regardless of which, if either, it turns out
+ * to be — each job moves the Communication onto whatever it confidently
+ * matched (a FlightRequest or a SupplierInquiry) only once it's sure; see
+ * CreateFlightRequestFromExtraction and MatchSupplierReplyToInquiry.
  */
 class ReceiveInboundEmail
 {
@@ -48,6 +52,7 @@ class ReceiveInboundEmail
         }
 
         ExtractFlightRequestFromEmail::dispatch($communication);
+        ExtractSupplierReplyFromEmail::dispatch($communication);
 
         return $communication;
     }
