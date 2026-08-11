@@ -555,6 +555,27 @@ list. `syncWithoutDetaching` rather than a plain `attach`/`sync` so this can nev
 assignment, even though nothing currently re-runs it after the first confirm (`needsReview()` hides the
 action once `reviewed_at` is set).
 
+**Phase 13 gave the spec's Step 3 its own screen — `ReviewFlightRequest`, reached via a "Review draft"
+row action on the list that only appears while `needsReview()` is true.** Before this, confirming or
+correcting an AI draft meant opening the plain `EditFlightRequest` form with no way to see the email it
+came from without a detour through the Communications tab or Mailpit. `ReviewFlightRequest extends
+EditRecord` (same base as `EditFlightRequest`, same `flights.manage` gate, same `HasFlightRequestReviewActions`
+trait for "Mark AI draft reviewed") but swaps in a custom `$view`
+(`filament.flight-requests.pages.review-ai-draft`) that renders the ordinary form next to a read-only
+panel showing the source email — subject, sender, body, attachments. Saving corrections and confirming
+the draft are deliberately still two separate actions, the plain form Save button and "Mark AI draft
+reviewed", not a new combined one — this page behaves exactly like `EditFlightRequest` once open, it
+just adds the email alongside it.
+
+**The "source email" is the earliest `EmailIn` `Communication` on the flight, not the latest.**
+`CreateFlightRequestFromExtraction` moves the triggering email onto the flight at creation time, but by
+the time an operator gets to reviewing it the flight may have picked up a reply or two — `getSourceEmail()`
+explicitly reorders past `HasCommunications`' own `->latest('occurred_at')` default (`->reorder('occurred_at')`,
+not `->oldest()` stacked on top of it, which would just add a second, losing `ORDER BY` clause) rather than
+showing whatever came in most recently. The kanban board's cards link an unreviewed flight's card to this
+page instead of the plain view page too, for the same reason the list's row action exists — same
+`needsReview()` check, `resources/views/filament/flight-requests/kanban-board.blade.php`.
+
 **`App\Domain\FlightRequests\Actions\CheckMissingInformation` is plain domain code, not `AI/*`** —
 a deliberate scope call, not an oversight. Every check the spec asks for (missing passenger/crew
 count, no customer billing email, an expired aircraft document, a landing/overflight permit service

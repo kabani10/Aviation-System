@@ -37,7 +37,7 @@
                 <div class="flex min-h-16 flex-col gap-2">
                     @forelse ($columns[$status->value] as $flightRequest)
                         <a
-                            href="{{ FlightRequestResource::getUrl('view', ['record' => $flightRequest]) }}"
+                            href="{{ FlightRequestResource::getUrl($flightRequest->needsReview() ? 'review' : 'view', ['record' => $flightRequest]) }}"
                             @if ($canManageStatus)
                                 x-sortable-item="{{ $flightRequest->id }}"
                                 x-sortable-handle

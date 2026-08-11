@@ -22,6 +22,7 @@ use Filament\Forms\Form;
 use Filament\Forms\Get;
 use Filament\Navigation\NavigationItem;
 use Filament\Resources\Resource;
+use Filament\Tables\Actions\Action;
 use Filament\Tables\Actions\EditAction;
 use Filament\Tables\Actions\ViewAction;
 use Filament\Tables\Columns\TextColumn;
@@ -196,6 +197,12 @@ class FlightRequestResource extends Resource
                     ->options(collect(FlightStatus::cases())->mapWithKeys(fn ($case) => [$case->value => $case->label()])),
             ])
             ->actions([
+                Action::make('review')
+                    ->label('Review draft')
+                    ->icon('heroicon-o-sparkles')
+                    ->color('warning')
+                    ->visible(fn (FlightRequest $record): bool => Auth::user()->can('flights.manage') && $record->needsReview())
+                    ->url(fn (FlightRequest $record): string => static::getUrl('review', ['record' => $record])),
                 ViewAction::make(),
                 EditAction::make(),
             ]);
@@ -224,6 +231,7 @@ class FlightRequestResource extends Resource
             'create' => Pages\CreateFlightRequest::route('/create'),
             'view' => Pages\ViewFlightRequest::route('/{record}'),
             'edit' => Pages\EditFlightRequest::route('/{record}/edit'),
+            'review' => Pages\ReviewFlightRequest::route('/{record}/review'),
         ];
     }
 
