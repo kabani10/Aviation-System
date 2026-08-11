@@ -462,6 +462,17 @@ documented inline in `RolesAndPermissionsSeeder`.
 supplier outside that list — unlike `aircraft_id`/`customer_id` in Flight Requests, a service using an
 "unlisted" supplier isn't invalid data, just unusual, so there's no server-side rule enforcing it.
 
+**Phase 14 grouped `ServicesRelationManager`'s table by leg, on by default (`->groups([Group::make('flight_leg_id')...])->defaultGroup('flight_leg_id')`).**
+Before this, "which leg does this service belong to" meant scanning a flat table's Leg column or reaching
+for its filter — the workflow gap this closes is "for each leg, multiple services, the operator should be
+able to go to the service of a leg" (the leg-scoped read-only `FlightItineraryOverview` widget already
+covered *viewing* this; this is the *editable* Services tab catching up to the same clarity). The group
+title comes from `FlightLeg::displayLabel()` via `getTitleFromRecordUsing`; the raw "Leg" column stays
+in the table too, for whenever an operator switches Filament's "Group by" control back to "None". Groups
+sort by the raw `flight_leg_id` — no `orderQueryUsing` override — which comes out leg-sequence order in
+practice, since every creation path (`CreateFlightRequestFromExtraction`, `CreateFlightRequest`,
+`LegsRelationManager`) always creates legs in ascending sequence order already.
+
 **"Operational risks" from the spec is modeled as of Phase 8** — `CheckOperationalRisks`, reading
 deadlines, statuses, and quote-request timestamps across a flight's services; see AI request
 extraction below for why it's deterministic domain code, not an `AI/*` class, despite the spec calling

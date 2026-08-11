@@ -27,7 +27,9 @@ use Filament\Tables\Actions\CreateAction;
 use Filament\Tables\Actions\EditAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Grouping\Group;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -52,6 +54,11 @@ use Illuminate\Support\Facades\Cache;
  * (it's part of what SupplierRecommender gives Claude to reason over), so
  * showing it to someone without cost visibility would leak through the
  * back door what the form field correctly hides.
+ *
+ * Phase 14 grouped the table by leg by default (see table()) — the flat,
+ * ungrouped table plus a Leg filter a reviewer had to reach for was the gap
+ * flagged against the workflow this resource implements: "for each leg,
+ * multiple services, the user should be able to go to the service of a leg."
  */
 class ServicesRelationManager extends RelationManager
 {
@@ -197,6 +204,24 @@ class ServicesRelationManager extends RelationManager
     public function table(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn (Builder $query): Builder => $query->with(['flightLeg.originAirport', 'flightLeg.destinationAirport']))
+            // Grouped by leg by default, not just filterable by it — "which
+            // leg does this belong to" is the first thing an operator on a
+            // multi-leg flight needs, not something to discover by scanning
+            // a flat table or reaching for the filter first. Ordering groups
+            // by the raw flight_leg_id (the default — no orderQueryUsing)
+            // still comes out leg-sequence order in practice: every creation
+            // path (CreateFlightRequestFromExtraction, CreateFlightRequest,
+            // LegsRelationManager) always creates legs in sequence order, so
+            // ascending id already matches ascending sequence. The "Leg"
+            // column stays too, for whenever an operator switches the
+            // "Group by" control back to "None".
+            ->groups([
+                Group::make('flight_leg_id')
+                    ->label('Leg')
+                    ->getTitleFromRecordUsing(fn (Service $record): string => $record->flightLeg?->displayLabel() ?? 'No leg'),
+            ])
+            ->defaultGroup('flight_leg_id')
             ->columns([
                 TextColumn::make('flightLeg.sequence')
                     ->label('Leg')
