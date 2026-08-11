@@ -30,6 +30,7 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Every service on this flight — ground handling, fuel, permits. Cost and
@@ -58,36 +59,64 @@ class ServicesRelationManager extends RelationManager
 
     protected static ?string $recordTitleAttribute = 'type';
 
-    /** @var array{recommendations: Collection<int, SupplierRecommendation>, error: ?string}|null */
-    private ?array $supplierRecommendationsCache = null;
-
-    private ?int $supplierRecommendationsCacheServiceId = null;
-
     /**
-     * The "suggest supplier" modal needs this result twice — once to render
-     * the ranked list, once to default the picker to the top pick — and it's
-     * a real API call, not a free lookup, so it's cached per-service for the
-     * request rather than fetched twice for one modal open.
+     * The "suggest supplier" modal needs this result at least twice — once
+     * to render the ranked list, once to default the picker to the top pick
+     * — and Filament rebuilds the whole ->form() schema again on submit to
+     * validate it, so a third call happens on every "Save supplier" click
+     * too. A plain instance property can't help: RelationManager is a
+     * Livewire component, and mount/save are separate HTTP requests, each
+     * booting a fresh instance — only real cross-request storage avoids
+     * hitting the real Claude API multiple times per interaction (each a
+     * multi-second external call sitting inside what should be an instant
+     * save). Cached for 5 minutes, comfortably longer than an operator takes
+     * to read the suggestions and click Save; failures are never cached, so
+     * a transient API error doesn't get stuck showing for the full window.
+     *
+     * Cached as a plain array, not the `SupplierRecommendation` DTOs
+     * directly — Redis's cache serializer round-trips plain arrays/scalars
+     * reliably, but a cached readonly object can come back as
+     * `__PHP_Incomplete_Class` (an "incomplete object" fatal the moment
+     * anything calls a method or reads a property on it) depending on
+     * exactly when/how the class was autoloaded relative to the unserialize
+     * call. Not worth chasing the exact trigger when avoiding it entirely is
+     * one `->map()` each way.
      *
      * @return array{recommendations: Collection<int, SupplierRecommendation>, error: ?string}
      */
     private function supplierRecommendationsFor(Service $service): array
     {
-        if ($this->supplierRecommendationsCacheServiceId === $service->id) {
-            return $this->supplierRecommendationsCache;
+        $cacheKey = "supplier-recommendations:{$service->id}";
+
+        $cached = Cache::get($cacheKey);
+
+        if ($cached !== null) {
+            return [
+                'recommendations' => collect($cached['recommendations'])
+                    ->map(fn (array $entry): SupplierRecommendation => new SupplierRecommendation(
+                        supplierId: $entry['supplierId'],
+                        rationale: $entry['rationale'],
+                    )),
+                'error' => null,
+            ];
         }
 
         try {
             $recommendations = app(SupplierRecommender::class)($service);
-            $error = null;
         } catch (ClaudeApiException $exception) {
-            $recommendations = collect();
-            $error = 'Could not get AI suggestions right now: '.$exception->getMessage();
+            return ['recommendations' => collect(), 'error' => 'Could not get AI suggestions right now: '.$exception->getMessage()];
         }
 
-        $this->supplierRecommendationsCacheServiceId = $service->id;
+        Cache::put($cacheKey, [
+            'recommendations' => $recommendations
+                ->map(fn (SupplierRecommendation $recommendation): array => [
+                    'supplierId' => $recommendation->supplierId,
+                    'rationale' => $recommendation->rationale,
+                ])
+                ->all(),
+        ], now()->addMinutes(5));
 
-        return $this->supplierRecommendationsCache = ['recommendations' => $recommendations, 'error' => $error];
+        return ['recommendations' => $recommendations, 'error' => null];
     }
 
     public function form(Form $form): Form

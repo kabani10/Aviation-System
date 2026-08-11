@@ -12,8 +12,8 @@
     @endif
 </ul>
 
-@if ($message)
-    <p>{{ $message }}</p>
+@if ($note)
+    <p>{{ $note }}</p>
 @endif
 
 <p>Please reply with your quote at your earliest convenience.</p>

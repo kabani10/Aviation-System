@@ -28,6 +28,15 @@ it('sends a quote request email, logs it, and moves the service to SupplierReque
 
     Mail::assertSent(SupplierQuoteRequestMail::class, fn ($mail) => $mail->hasTo('quotes@fuelco.com') && $mail->service->is($service));
 
+    // Mail::assertSent() never renders the view, so it can't catch bugs in
+    // the Blade template itself — render for real here. This is also a
+    // regression test for a bug where the mailable's optional-note property
+    // was named $message, which Illuminate\Mail\Mailer::send() silently
+    // overwrites with its own Illuminate\Mail\Message view variable, crashing
+    // htmlspecialchars() in the template.
+    $rendered = (new SupplierQuoteRequestMail($service, 'Please quote for tomorrow.'))->render();
+    expect($rendered)->toContain('Please quote for tomorrow.');
+
     $service->refresh();
     expect($service->status)->toBe(ServiceStatus::SupplierRequestSent);
     expect($service->quote_requested_at)->not->toBeNull();

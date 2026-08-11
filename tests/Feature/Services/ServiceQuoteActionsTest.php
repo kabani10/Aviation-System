@@ -11,6 +11,7 @@ use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages\EditFlight
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\ServicesRelationManager;
 use App\Mail\SupplierQuoteRequestMail;
 use App\Support\Tenancy\CurrentCompany;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Livewire\Livewire;
@@ -109,6 +110,67 @@ it('shows AI-suggested suppliers ranked with rationale in the modal', function (
         ->assertHasNoTableActionErrors();
 
     expect($service->fresh()->supplier_id)->toBe($supplier->id);
+    // Regression check for the cross-request caching fix: Filament rebuilds
+    // the form (and therefore re-evaluates supplierRecommendationsFor) once
+    // to render the modal and again to validate on submit — without the
+    // Cache::remember, that's two real Claude calls for one interaction.
+    Http::assertSentCount(1);
+});
+
+it('reopens the suggest-supplier modal a second time without crashing, against a real Redis cache round-trip', function () {
+    // The `array` cache driver phpunit.xml normally forces for tests never
+    // actually serializes anything, so it can't catch a bug that only shows
+    // up when a cached value comes back through a real serialize/unserialize
+    // round-trip — exactly what happened in production: caching the
+    // recommendation Collection directly (rather than a plain array) came
+    // back from Redis as `__PHP_Incomplete_Class` on the second read,
+    // crashing the instant anything touched it. Deliberately opts into the
+    // real driver for this one test.
+    config(['cache.default' => 'redis']);
+    Cache::flush();
+
+    config(['services.anthropic.key' => 'test-anthropic-key']);
+
+    $company = Company::factory()->create();
+    $procurement = userWithRoleFor($company, 'Procurement');
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    $supplier = Supplier::factory()->for($company)->create(['name' => 'Best Fuel Co', 'services_offered' => [ServiceType::Fuel->value]]);
+    $service = Service::factory()->for($flightRequest)->create(['type' => ServiceType::Fuel, 'supplier_id' => null]);
+
+    Http::fake([
+        'api.anthropic.com/*' => Http::response([
+            'id' => 'msg_test',
+            'type' => 'message',
+            'role' => 'assistant',
+            'content' => [[
+                'type' => 'tool_use',
+                'id' => 'toolu_test',
+                'name' => 'recommend_suppliers',
+                'input' => ['recommendations' => [['supplier_id' => $supplier->id, 'rationale' => 'Fast and reliable historically.']]],
+            ]],
+            'stop_reason' => 'tool_use',
+        ]),
+    ]);
+
+    // First open + save (writes the cache entry via a real Redis round-trip).
+    Livewire::actingAs($procurement)
+        ->test(ServicesRelationManager::class, ['ownerRecord' => $flightRequest, 'pageClass' => EditFlightRequest::class])
+        ->mountTableAction('suggestSupplier', $service)
+        ->callMountedTableAction()
+        ->assertHasNoTableActionErrors();
+
+    // Reopening it — a fresh component instance, reading the cache entry
+    // Redis actually serialized rather than one still sitting in PHP memory
+    // — is the exact step that crashed before this fix.
+    Livewire::actingAs($procurement)
+        ->test(ServicesRelationManager::class, ['ownerRecord' => $flightRequest, 'pageClass' => EditFlightRequest::class])
+        ->mountTableAction('suggestSupplier', $service)
+        ->assertSee('Best Fuel Co')
+        ->assertSee('Fast and reliable historically.');
+
+    Cache::flush();
 });
 
 it('lets the operator search and pick a different supplier than the AI suggested, in the same modal', function () {

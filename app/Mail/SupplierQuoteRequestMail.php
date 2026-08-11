@@ -22,7 +22,11 @@ class SupplierQuoteRequestMail extends Mailable
 
     public function __construct(
         public readonly Service $service,
-        public readonly ?string $message = null,
+        // Deliberately not named $message: Illuminate\Mail\Mailer::send()
+        // injects its own 'message' view variable (the underlying
+        // Illuminate\Mail\Message, for ->embed() in Markdown mails), which
+        // silently overwrites a same-named public property in the view data.
+        public readonly ?string $note = null,
     ) {}
 
     public function envelope(): Envelope
