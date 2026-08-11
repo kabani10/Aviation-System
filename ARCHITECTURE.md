@@ -712,9 +712,59 @@ means nothing if the same number reaches the same user through an AI-generated s
 **Procurement gained `services.manage`** (previously view-only) — the same class of spec-supported gap
 as Sales/`flights.manage` (Phase 5) and Sales+Finance/`services.view` (Phase 6). Procurement is who
 actually talks to suppliers per the spec, and already held `finance.view_costs`, but had no permission
-to trigger `SendSupplierRequest`/`RecordSupplierQuote` at all until this phase — a gap that only became
-visible once those actions existed to check permissions against. Documented inline in
+to trigger a quote request or record one at all until this phase — a gap that only became visible once
+those actions existed to check permissions against (`SendSupplierInquiry`/`RecordSupplierInquiryResponse`
+as of Phase 15 — `SendSupplierRequest`/`RecordSupplierQuote` originally). Documented inline in
 `RolesAndPermissionsSeeder`.
+
+**Phase 15 reworked the single-supplier quote cycle above into a multi-supplier one — "select several
+suppliers, send inquiries to each, compare replies before picking one" from the workflow spec.**
+`App\Domain\Services\Models\SupplierInquiry` is the new layer this needed: one row per candidate
+supplier asked about one `Service`, `belongsTo Service`/`Supplier`/`SupplierContact` plus `requestedBy`
+(`User`), cast to a small `SupplierInquiryStatus` (`Sent` → `QuoteReceived` → `Chosen`) that's
+deliberately narrower than `ServiceStatus` — it only tracks "did this candidate quote us", not the
+service's whole lifecycle. `Service.supplier_id`/`cost` now mean **"the supplier we chose"**, not "the
+supplier we're asking" — a service can have several `SupplierInquiry` rows in flight at once, something
+the old single `supplier_id` column had no way to represent.
+
+**Three actions replace the old two, one per inquiry-lifecycle step, same "no generic edit, every state
+change is a named action" convention as Quotation/Invoice:**
+
+- **`SendSupplierInquiry`** (`SendSupplierRequest` originally) creates the `SupplierInquiry`, emails the
+  chosen contact via the same `SupplierQuoteRequestMail`, and logs the outbound email as a
+  `Communication` **on the inquiry itself**, not the `Service` — a service with three inquiries out now
+  keeps three separate conversations instead of one blurred timeline, the same "a flight's several
+  quotations each keep their own correspondence" reasoning `Quotation` already established. Bumps
+  `Service.status` to `SupplierRequestSent` only on the first inquiry (`NotStarted`/`InformationRequired`
+  → `SupplierRequestSent`) — a second candidate for the same service doesn't re-trigger it, and it never
+  regresses a service already further along.
+- **`RecordSupplierInquiryResponse`** (`RecordSupplierQuote` originally) sets `cost`/`notes`/
+  `responded_at` and `QuoteReceived` **on the inquiry**, not the `Service` — recording what one candidate
+  quoted doesn't decide anything yet.
+- **`ChooseSupplierInquiry`** is new: the actual decision. Copies the winning inquiry's `supplier_id`/
+  `cost`/`requested_at`/`responded_at` onto the `Service`, demotes any other inquiry on the same service
+  that was previously `Chosen` back to `QuoteReceived` (re-picking after changing your mind never leaves
+  two inquiries both marked `Chosen`), and only advances `Service.status` to `QuotationReceived` when it's
+  still at `NotStarted`/`InformationRequired`/`SupplierRequestSent` — choosing a different supplier for a
+  service that's already `Confirmed` (or later) updates the price without silently rewinding a status that
+  reflects real progress.
+
+**Two access surfaces, split by where a single `Service` is naturally in scope, not by "browse vs.
+do" the way Quotation/Invoice split.** `ServicesRelationManager` keeps a per-service "Send RFQ" row
+action — the AI-ranked suggestion list (`supplierRecommendationsFor()`, moved here from the old
+"Suggest supplier") needs one specific service's type/leg to filter and rank against, which only a row
+action naturally has; a flight-wide header action would need the service picked reactively first, with
+no service in scope until then. The new `SupplierInquiriesRelationManager` tab is everything *after*
+that — every inquiry across every service, grouped by service by default (same `Group::make()` pattern
+Phase 14 established), with `recordResponse`/`chooseSupplier` row actions. It has no `CreateAction`: there's
+deliberately one entry point for starting an inquiry (the Services tab), not two competing ones.
+
+**The AI suggestions block is conditionally built, not just conditionally hidden.** "Send RFQ" is visible
+to anyone with `services.manage` — Operations included, same as `SendSupplierRequest`'s old gate — but the
+`supplierRecommendationsFor()` call (a real Claude API request) only happens when the caller also has
+`finance.view_costs`, for the same cost-leaks-through-a-rationale reason Phase 8 gated "Suggest supplier"
+on it. Operations gets a plain searchable supplier picker with no wasted API call, not just the AI panel
+hidden after the fact.
 
 ## Notifications & reminders
 

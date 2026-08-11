@@ -11,6 +11,7 @@ use App\Domain\Quotations\Enums\QuotationStatus;
 use App\Domain\Quotations\Models\Quotation;
 use App\Domain\ReferenceData\Models\Airport;
 use App\Domain\Services\Enums\ServiceStatus;
+use App\Domain\Services\Enums\SupplierInquiryStatus;
 use App\Domain\Shared\Enums\ServiceType;
 use App\Domain\Suppliers\Models\Supplier;
 use App\Domain\Suppliers\Models\SupplierContact;
@@ -23,6 +24,7 @@ use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages\ViewFlight
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\InvoicesRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\QuotationsRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\ServicesRelationManager;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\SupplierInquiriesRelationManager;
 use App\Mail\InvoiceMail;
 use App\Mail\QuotationMail;
 use App\Mail\SupplierQuoteRequestMail;
@@ -129,27 +131,45 @@ function runFullLifecycleForE2E(Company $company, User $admin, string $callsign,
         ->callTableAction('create', data: [
             'type' => ServiceType::GroundHandling->value,
             'status' => ServiceStatus::NotStarted->value,
-            'supplier_id' => $supplier->id,
             'selling_price' => 1500,
         ])
         ->assertHasNoTableActionErrors();
 
     $service = $flightRequest->services()->firstOrFail();
 
+    // Multi-supplier RFQ flow (Phase 15): send an inquiry, record what came
+    // back on that inquiry, then choose it — supplier_id/cost land on the
+    // Service only once chosen, not the moment a supplier is picked to ask.
     Livewire::actingAs($admin)
         ->test(ServicesRelationManager::class, ['ownerRecord' => $flightRequest, 'pageClass' => EditFlightRequest::class])
-        ->callTableAction('requestQuote', $service, data: ['supplier_contact_id' => $contact->id, 'message' => 'Please quote ground handling.'])
+        ->callTableAction('sendInquiry', $service, data: [
+            'supplier_id' => $supplier->id,
+            'supplier_contact_id' => $contact->id,
+            'message' => 'Please quote ground handling.',
+        ])
         ->assertHasNoTableActionErrors();
 
     expect($service->fresh()->status)->toBe(ServiceStatus::SupplierRequestSent);
 
+    $inquiry = $service->supplierInquiries()->firstOrFail();
+
     Livewire::actingAs($admin)
-        ->test(ServicesRelationManager::class, ['ownerRecord' => $flightRequest, 'pageClass' => EditFlightRequest::class])
-        ->callTableAction('recordQuote', $service, data: ['cost' => 750, 'notes' => 'Quoted by email.'])
+        ->test(SupplierInquiriesRelationManager::class, ['ownerRecord' => $flightRequest, 'pageClass' => EditFlightRequest::class])
+        ->callTableAction('recordResponse', $inquiry, data: ['cost' => 750, 'notes' => 'Quoted by email.'])
+        ->assertHasNoTableActionErrors();
+
+    $inquiry = $inquiry->fresh();
+    expect($inquiry->status)->toBe(SupplierInquiryStatus::QuoteReceived);
+    expect((float) $inquiry->cost)->toBe(750.0);
+
+    Livewire::actingAs($admin)
+        ->test(SupplierInquiriesRelationManager::class, ['ownerRecord' => $flightRequest, 'pageClass' => EditFlightRequest::class])
+        ->callTableAction('chooseSupplier', $inquiry)
         ->assertHasNoTableActionErrors();
 
     $service->refresh();
     expect($service->status)->toBe(ServiceStatus::QuotationReceived);
+    expect($service->supplier_id)->toBe($supplier->id);
     expect((float) $service->cost)->toBe(750.0);
 
     // Supplier confirmed by phone — the operator's own manual step before a

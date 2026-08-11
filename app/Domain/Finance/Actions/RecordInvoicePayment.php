@@ -12,7 +12,7 @@ use App\Domain\FlightRequests\Enums\FlightStatus;
  * Records that payment came in — no partial payments, no payment
  * gateway integration, just an operator noting what happened, same
  * "record what an external party told you" pattern as
- * RecordSupplierQuote/RecordQuotationResponse. This is the one place
+ * RecordSupplierInquiryResponse/RecordQuotationResponse. This is the one place
  * FlightStatus::Closed gets set — the final stop in the flight's
  * lifecycle.
  */

@@ -6,8 +6,7 @@ use App\AI\SupplierRecommendation\DataTransferObjects\SupplierRecommendation;
 use App\AI\SupplierRecommendation\Recommenders\SupplierRecommender;
 use App\AI\Support\ClaudeApiException;
 use App\Domain\FlightRequests\Models\FlightLeg;
-use App\Domain\Services\Actions\RecordSupplierQuote;
-use App\Domain\Services\Actions\SendSupplierRequest;
+use App\Domain\Services\Actions\SendSupplierInquiry;
 use App\Domain\Services\Enums\ServiceStatus;
 use App\Domain\Services\Models\Service;
 use App\Domain\Shared\Enums\ServiceType;
@@ -44,16 +43,27 @@ use Illuminate\Support\Facades\Cache;
  * field that still submits null would silently wipe an existing cost/price
  * when a non-Finance user saves other changes to the service.
  *
- * "Request quote" / "Record quote" (Phase 8) operationalize the
- * SupplierRequestSent/QuotationReceived statuses that already existed on
- * ServiceStatus since Phase 6 but had no action behind them. "Record quote"
- * additionally requires finance.view_costs, same reasoning as the cost
- * field above — the whole point of the action is entering one. "Suggest
- * supplier" requires it too, for a subtler reason: the AI's rationale text
- * is free-form and can end up stating a supplier's average cost outright
- * (it's part of what SupplierRecommender gives Claude to reason over), so
- * showing it to someone without cost visibility would leak through the
- * back door what the form field correctly hides.
+ * The actual "ask suppliers for a quote, compare replies, pick one" workflow
+ * (the spec's Phase 8, reworked in Phase 15 to support several candidate
+ * suppliers at once) mostly lives on the separate SupplierInquiriesRelationManager
+ * tab — recording a response and choosing a winner happen there, once an
+ * inquiry exists. Starting one is still here, as "Send RFQ" below: it's a
+ * per-service action, and only a Service row (not the flight-wide inquiries
+ * tab) has a single service in scope to filter AI suggestions by without
+ * more reactive form wiring than this is worth. `supplier_id`/`cost` stay
+ * directly editable on this form too, as a manual override that skips the
+ * RFQ comparison entirely (an operator who already knows the answer
+ * shouldn't have to create and choose an inquiry just to record it).
+ *
+ * "Send RFQ" shows the same AI-ranked supplier suggestions "Suggest
+ * supplier" used to (Phase 8), but only when finance.view_costs — the AI's
+ * rationale is free-form text that can end up stating a supplier's average
+ * cost outright (SupplierRecommender gives Claude that metric to reason
+ * over), so showing it to someone without cost visibility would leak
+ * through the back door what the cost field correctly hides. Operations
+ * (services.manage but not finance.view_costs) still gets a plain supplier
+ * picker with no AI block and no wasted Claude API call — the
+ * recommendations are only computed when they'll actually be shown.
  *
  * Phase 14 grouped the table by leg by default (see table()) — the flat,
  * ungrouped table plus a Leg filter a reviewer had to reach for was the gap
@@ -67,27 +77,14 @@ class ServicesRelationManager extends RelationManager
     protected static ?string $recordTitleAttribute = 'type';
 
     /**
-     * The "suggest supplier" modal needs this result at least twice — once
-     * to render the ranked list, once to default the picker to the top pick
-     * — and Filament rebuilds the whole ->form() schema again on submit to
-     * validate it, so a third call happens on every "Save supplier" click
-     * too. A plain instance property can't help: RelationManager is a
-     * Livewire component, and mount/save are separate HTTP requests, each
-     * booting a fresh instance — only real cross-request storage avoids
-     * hitting the real Claude API multiple times per interaction (each a
-     * multi-second external call sitting inside what should be an instant
-     * save). Cached for 5 minutes, comfortably longer than an operator takes
-     * to read the suggestions and click Save; failures are never cached, so
-     * a transient API error doesn't get stuck showing for the full window.
-     *
-     * Cached as a plain array, not the `SupplierRecommendation` DTOs
-     * directly — Redis's cache serializer round-trips plain arrays/scalars
-     * reliably, but a cached readonly object can come back as
-     * `__PHP_Incomplete_Class` (an "incomplete object" fatal the moment
-     * anything calls a method or reads a property on it) depending on
-     * exactly when/how the class was autoloaded relative to the unserialize
-     * call. Not worth chasing the exact trigger when avoiding it entirely is
-     * one `->map()` each way.
+     * Same cross-request caching reasoning as Phase 8's original
+     * "Suggest supplier" — Filament rebuilds the ->form() schema on submit
+     * too, so without this a "Send RFQ" open+save is two real Claude calls
+     * for one interaction, each a multi-second external call inside what
+     * should be an instant save. Cached as a plain array, not the
+     * SupplierRecommendation DTOs directly, since a cached readonly object
+     * can come back __PHP_Incomplete_Class through a real Redis
+     * serialize/unserialize round-trip.
      *
      * @return array{recommendations: Collection<int, SupplierRecommendation>, error: ?string}
      */
@@ -175,7 +172,7 @@ class ServicesRelationManager extends RelationManager
                     ->pluck('name', 'id')
                     ->all())
                 ->searchable()
-                ->helperText('Filtered to suppliers who list this service, once a type is chosen — not enforced, just a shortlist.'),
+                ->helperText('The chosen supplier — normally set by picking a winning inquiry on the Supplier Inquiries tab, but editable here directly too.'),
 
             TextInput::make('cost')
                 ->numeric()
@@ -262,85 +259,62 @@ class ServicesRelationManager extends RelationManager
             ->actions([
                 EditAction::make(),
 
-                Action::make('requestQuote')
-                    ->label('Request quote')
+                Action::make('sendInquiry')
+                    ->label('Send RFQ')
                     ->icon('heroicon-o-paper-airplane')
-                    ->visible(fn (Service $record): bool => Auth::user()->can('services.manage') && $record->supplier_id !== null)
-                    ->form([
-                        Select::make('supplier_contact_id')
-                            ->label('Send to')
-                            ->options(fn (Service $record): array => $record->supplier?->contacts()->pluck('name', 'id')->all() ?? [])
-                            ->required()
-                            ->native(false),
-                        Textarea::make('message')
-                            ->label('Additional message (optional)')
-                            ->rows(3),
-                    ])
-                    ->action(function (Service $record, array $data): void {
-                        $contact = SupplierContact::query()->findOrFail($data['supplier_contact_id']);
-
-                        app(SendSupplierRequest::class)($record, $contact, $data['message'] ?: null, Auth::user());
-                    })
-                    ->successNotificationTitle('Quote request sent'),
-
-                Action::make('recordQuote')
-                    ->label('Record quote')
-                    ->icon('heroicon-o-currency-dollar')
-                    ->visible(fn (): bool => Auth::user()->can('services.manage') && Auth::user()->can('finance.view_costs'))
-                    ->form([
-                        TextInput::make('cost')
-                            ->numeric()
-                            ->prefix('$')
-                            ->required(),
-                        Textarea::make('notes')
-                            ->rows(2),
-                    ])
-                    ->action(function (Service $record, array $data): void {
-                        app(RecordSupplierQuote::class)($record, (float) $data['cost'], $data['notes'] ?: null, Auth::user());
-                    })
-                    ->successNotificationTitle('Quote recorded'),
-
-                Action::make('suggestSupplier')
-                    ->label('Suggest supplier')
-                    ->icon('heroicon-o-sparkles')
-                    ->visible(fn (): bool => Auth::user()->can('services.manage') && Auth::user()->can('finance.view_costs'))
-                    ->modalHeading('Suggested suppliers')
-                    ->modalSubmitActionLabel('Save supplier')
-                    // A real form now, not a read-only modal: the AI's ranked
-                    // list is shown for context (via the View component) but
-                    // the actual choice is an ordinary searchable Select,
-                    // defaulted to the AI's top pick — pick a different
-                    // supplier by searching instead of accepting it, or close
-                    // without saving to leave the service untouched.
+                    ->visible(fn (): bool => Auth::user()->can('services.manage'))
+                    // No supplier_id precondition anymore — see the class
+                    // docblock. Calling this again for the same service (a
+                    // second candidate supplier) is the normal multi-RFQ
+                    // case, not an edge case.
                     ->form(function (Service $record): array {
-                        $result = $this->supplierRecommendationsFor($record);
+                        $canSeeAiSuggestions = Auth::user()->can('finance.view_costs');
+                        $result = $canSeeAiSuggestions ? $this->supplierRecommendationsFor($record) : null;
 
                         return [
-                            ViewComponent::make('filament.flight-requests.supplier-suggestions')
-                                ->viewData([
-                                    'recommendations' => $result['recommendations'],
-                                    'supplierNames' => Supplier::query()->pluck('name', 'id'),
-                                    'error' => $result['error'],
-                                ]),
+                            ...($canSeeAiSuggestions ? [
+                                ViewComponent::make('filament.flight-requests.supplier-suggestions')
+                                    ->viewData([
+                                        'recommendations' => $result['recommendations'],
+                                        'supplierNames' => Supplier::query()->pluck('name', 'id'),
+                                        'error' => $result['error'],
+                                    ]),
+                            ] : []),
 
                             Select::make('supplier_id')
                                 ->label('Supplier')
                                 ->searchable()
                                 ->native(false)
+                                ->live()
                                 ->options(fn (): array => Supplier::query()
                                     ->where('is_active', true)
                                     ->whereJsonContains('services_offered', $record->type->value)
                                     ->pluck('name', 'id')
                                     ->all())
-                                ->default(fn (): ?int => $result['recommendations']->first()?->supplierId ?? $record->supplier_id)
-                                ->helperText('Pre-filled with the AI\'s top pick, if it found one — search to choose a different supplier instead.')
+                                ->default(fn (): ?int => $canSeeAiSuggestions ? $result['recommendations']->first()?->supplierId : null)
+                                ->afterStateUpdated(fn (callable $set) => $set('supplier_contact_id', null))
                                 ->required(),
+
+                            Select::make('supplier_contact_id')
+                                ->label('Send to')
+                                ->options(fn (Get $get): array => $get('supplier_id')
+                                    ? Supplier::query()->find($get('supplier_id'))?->contacts()->pluck('name', 'id')->all() ?? []
+                                    : [])
+                                ->required()
+                                ->native(false),
+
+                            Textarea::make('message')
+                                ->label('Additional message (optional)')
+                                ->rows(3),
                         ];
                     })
                     ->action(function (Service $record, array $data): void {
-                        $record->update(['supplier_id' => $data['supplier_id']]);
+                        $supplier = Supplier::query()->findOrFail($data['supplier_id']);
+                        $contact = SupplierContact::query()->findOrFail($data['supplier_contact_id']);
+
+                        app(SendSupplierInquiry::class)($record, $supplier, $contact, $data['message'] ?: null, Auth::user());
                     })
-                    ->successNotificationTitle('Supplier updated'),
+                    ->successNotificationTitle('Quote request sent'),
             ]);
     }
 }

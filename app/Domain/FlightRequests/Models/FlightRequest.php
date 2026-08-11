@@ -11,6 +11,7 @@ use App\Domain\FlightRequests\Enums\FlightStatus;
 use App\Domain\FlightRequests\Enums\RequestSource;
 use App\Domain\Quotations\Models\Quotation;
 use App\Domain\Services\Models\Service;
+use App\Domain\Services\Models\SupplierInquiry;
 use App\Domain\Shared\Concerns\BelongsToCompany;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -19,6 +20,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Support\Carbon;
 use Spatie\Activitylog\Models\Concerns\LogsActivity;
 use Spatie\Activitylog\Support\LogOptions;
@@ -87,6 +89,18 @@ class FlightRequest extends Model
     public function services(): HasMany
     {
         return $this->hasMany(Service::class);
+    }
+
+    /**
+     * Every SupplierInquiry across every service on this flight — the
+     * SupplierInquiriesRelationManager tab reads this, the same "through
+     * the denormalized flight_request_id column" shortcut services()
+     * itself is built on (see the class docblock and FlightLeg's), not a
+     * join through legs.
+     */
+    public function supplierInquiries(): HasManyThrough
+    {
+        return $this->hasManyThrough(SupplierInquiry::class, Service::class);
     }
 
     public function quotations(): HasMany

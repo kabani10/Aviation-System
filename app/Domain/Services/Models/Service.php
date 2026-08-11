@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * One line item on a flight — ground handling, fuel, a landing permit.
@@ -33,8 +34,16 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * belong here, not on the flight), but there's no nested RelationManager
  * UI for it yet — Filament doesn't nest a RelationManager inside another
  * RelationManager, and Service doesn't have its own top-level resource to
- * hang one off of. HasCommunications is used as of Phase 8, for the
- * quote-request/quote-received log — see SendSupplierRequest.
+ * hang one off of. HasCommunications is used as of Phase 8, for a
+ * quote-request/quote-received log — as of Phase 15 that log lives per
+ * SupplierInquiry instead (see that model's docblock), not here directly.
+ *
+ * `supplier_id`/`cost` mean "the supplier we chose", as of Phase 15 — not
+ * "the supplier we're asking". Comparing several candidates before
+ * deciding happens through `supplierInquiries()` (`ChooseSupplierInquiry`
+ * copies the winning one's supplier/cost here); these two fields stay
+ * directly editable too, for a manual override that skips the RFQ
+ * comparison entirely.
  */
 #[Fillable([
     // flight_request_id is here even though FlightRequest::services()->create()
@@ -82,6 +91,11 @@ class Service extends Model
     public function supplier(): BelongsTo
     {
         return $this->belongsTo(Supplier::class);
+    }
+
+    public function supplierInquiries(): HasMany
+    {
+        return $this->hasMany(SupplierInquiry::class);
     }
 
     /**

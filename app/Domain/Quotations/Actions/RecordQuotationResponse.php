@@ -14,7 +14,8 @@ use InvalidArgumentException;
  * customer portal, so this is always an operator entering what came back
  * by phone, email reply, or however else the customer responded, same
  * "record what an external party told you" pattern as
- * RecordSupplierQuote in Phase 8. Accepting a quotation is what actually
+ * RecordSupplierInquiryResponse in Phase 8 (RecordSupplierQuote originally,
+ * reworked in Phase 15). Accepting a quotation is what actually
  * confirms the flight (FlightStatus::Confirmed) — this is the one place
  * in the app that transition happens.
  */

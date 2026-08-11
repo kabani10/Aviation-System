@@ -13,6 +13,7 @@ use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\LegsRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\QuotationsRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\ServicesRelationManager;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\SupplierInquiriesRelationManager;
 use Closure;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Select;
@@ -213,6 +214,7 @@ class FlightRequestResource extends Resource
         return [
             LegsRelationManager::class,
             ServicesRelationManager::class,
+            SupplierInquiriesRelationManager::class,
             QuotationsRelationManager::class,
             InvoicesRelationManager::class,
             DocumentsRelationManager::class,
