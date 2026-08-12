@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\FlightRequests;
 
 use App\Domain\Aircraft\Models\Aircraft;
+use App\Domain\FlightRequests\Actions\CheckFlightReadinessWarning;
 use App\Domain\FlightRequests\Enums\FlightStatus;
 use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\ReferenceData\Models\Airport;
@@ -26,6 +27,7 @@ use Filament\Resources\Resource;
 use Filament\Tables\Actions\Action;
 use Filament\Tables\Actions\EditAction;
 use Filament\Tables\Actions\ViewAction;
+use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
@@ -168,8 +170,21 @@ class FlightRequestResource extends Resource
             // withMin, not computed per-row, so it stays sortable.
             ->modifyQueryUsing(fn (Builder $query): Builder => $query
                 ->withMin('legs', 'departure_at')
-                ->with(['legs.originAirport', 'legs.destinationAirport']))
+                ->with(['legs.originAirport', 'legs.destinationAirport', 'services']))
             ->columns([
+                // Phase 19's passive "day-of, not fully ready" signal —
+                // CheckFlightReadiness already computes the underlying
+                // findings for the explicit mark-in-operation modal; this
+                // just surfaces the same answer without anyone having to
+                // click anything, gated to flights actually departing soon
+                // (see CheckFlightReadinessWarning). ->state() computes once
+                // per row so icon()/tooltip() don't each re-run the check.
+                IconColumn::make('readiness_warning')
+                    ->label('')
+                    ->state(fn (FlightRequest $record): bool => app(CheckFlightReadinessWarning::class)($record))
+                    ->icon(fn (bool $state): ?string => $state ? 'heroicon-o-exclamation-triangle' : null)
+                    ->color('danger')
+                    ->tooltip(fn (bool $state): ?string => $state ? 'Departing soon and not fully ready — open the flight for details.' : null),
                 TextColumn::make('callsign')->searchable()->placeholder('—'),
                 TextColumn::make('customer.name')->searchable(),
                 TextColumn::make('aircraft.registration')->label('Aircraft'),

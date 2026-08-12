@@ -1026,6 +1026,38 @@ gated only by a data condition (`->visible(fn () => $record->someState)`) and no
 check inherits whatever the *page's* minimum access level is, not the action's actual sensitivity — that
 gap is easy to introduce again on a future action if this isn't kept in mind.
 
+**Phase 19 makes `CheckFlightReadiness` passive.** Before this, its findings only ever surfaced when an
+operator explicitly clicked "Mark in operation"/"Mark completed" — a flight sitting unconfirmed a day
+before departure gave no signal unless someone happened to open it. `App\Domain\FlightRequests\Actions\CheckFlightReadinessWarning`
+is the new passive layer: it calls `CheckFlightReadiness` (unchanged, same advisory-only behavior for the
+explicit transition modals) but only bothers when departure is close (`WARNING_WINDOW_DAYS`, a plain class
+constant like `CheckOperationalRisks`' own thresholds — not a per-tenant setting, revisit if real usage
+asks for one) and the flight's status hasn't already moved past the point where "not fully confirmed"
+stops being useful (`InOperation`/`Completed`/`Invoiced`/`Closed`/`Cancelled`).
+
+**Kept as its own class rather than a second method on `CheckFlightReadiness`** — every other `Check*`
+action in this app does exactly one job, and layering a date/status gate on top is a genuinely different
+concern from "what's wrong right now", not just a different presentation of the same answer.
+
+**Three passive surfaces, one shared check:**
+
+- **The flight list** (`FlightRequestResource::table()`) gets a leading icon column — `->state()` computes
+  `CheckFlightReadinessWarning` once per row, and `icon()`/`tooltip()` both just read that resolved state
+  rather than each re-running the check. Deliberately not optimized further than eager-loading `services`
+  in `modifyQueryUsing` — `CheckFlightReadiness`'s accepted-quotation check still issues one query per row
+  regardless, the same "not worth it until real usage shows a problem" call Phase 12 already made about
+  date-range filtering on the financial summary. A single tenant's active-flights list isn't expected to
+  be large enough for that to matter.
+- **The kanban board** (`kanban-board.blade.php`) shows the same warning as a small icon next to the
+  card's title, via the already-loaded Heroicons blade components (`<x-heroicon-o-exclamation-triangle>`)
+  the Mailpit panel already uses elsewhere in this app.
+- **The view page** (`FlightItineraryOverview` widget) shows a banner above the leg-by-leg breakdown,
+  spelling out the actual `CheckFlightReadiness` findings — this page has the room the other two don't.
+
+**Not modeled:** the daily digest (`BuildFlightRequestDigest`) doesn't pick this up — deliberately scoped
+out of this phase, which is about passive *in-app* surfaces, not another notification channel. Worth
+revisiting once these three surfaces are actually in use.
+
 ## Finance
 
 The final phase per the roadmap — invoicing and cross-flight financial reporting, closing out

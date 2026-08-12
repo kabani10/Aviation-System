@@ -1,5 +1,19 @@
 <x-filament-widgets::widget>
     <div class="space-y-4">
+        @if ($this->needsReadinessWarning())
+            <div class="flex items-start gap-2 rounded-xl bg-danger-50 p-4 ring-1 ring-danger-600/10 dark:bg-danger-500/10 dark:ring-danger-400/20">
+                <x-heroicon-o-exclamation-triangle class="mt-0.5 h-5 w-5 shrink-0 text-danger-500" />
+                <div>
+                    <p class="font-medium text-danger-700 dark:text-danger-400">Departing soon and not fully ready</p>
+                    <ul class="mt-1 list-disc space-y-0.5 pl-4 text-sm text-gray-600 dark:text-gray-400">
+                        @foreach ($this->getReadinessIssues() as $issue)
+                            <li>{{ $issue->message }}</li>
+                        @endforeach
+                    </ul>
+                </div>
+            </div>
+        @endif
+
         @foreach ($this->getLegs() as $leg)
             <x-filament::section>
                 <x-slot name="heading">

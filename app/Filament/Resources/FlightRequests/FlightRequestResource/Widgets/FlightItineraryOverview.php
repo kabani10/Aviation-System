@@ -2,8 +2,12 @@
 
 namespace App\Filament\Resources\FlightRequests\FlightRequestResource\Widgets;
 
+use App\Domain\FlightRequests\Actions\CheckFlightReadiness;
+use App\Domain\FlightRequests\Actions\CheckFlightReadinessWarning;
+use App\Domain\FlightRequests\DataTransferObjects\ReadinessIssue;
 use App\Domain\FlightRequests\Models\FlightRequest;
 use Filament\Widgets\Widget;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 
 /**
@@ -18,6 +22,11 @@ use Illuminate\Support\Facades\Auth;
  * Not in app/Filament/Widgets — that folder is auto-discovered onto the
  * Dashboard (see AdminPanelProvider), and this widget requires a specific
  * FlightRequest record it has no business rendering without.
+ *
+ * As of Phase 19, also the view page's home for the passive "departing soon
+ * and not ready" banner — the same signal the list and kanban board show,
+ * spelled out here with the actual CheckFlightReadiness findings since this
+ * page has the room for them.
  */
 class FlightItineraryOverview extends Widget
 {
@@ -50,5 +59,16 @@ class FlightItineraryOverview extends Widget
     public function canViewPrices(): bool
     {
         return Auth::user()->can('finance.view_prices');
+    }
+
+    public function needsReadinessWarning(): bool
+    {
+        return app(CheckFlightReadinessWarning::class)($this->record);
+    }
+
+    /** @return Collection<int, ReadinessIssue> */
+    public function getReadinessIssues(): Collection
+    {
+        return app(CheckFlightReadiness::class)($this->record);
     }
 }

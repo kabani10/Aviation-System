@@ -1,4 +1,5 @@
 @php
+    use App\Domain\FlightRequests\Actions\CheckFlightReadinessWarning;
     use App\Domain\FlightRequests\Enums\FlightStatus;
     use App\Filament\Resources\FlightRequests\FlightRequestResource;
 
@@ -44,8 +45,14 @@
                             @endif
                             class="block rounded-lg bg-white p-3 text-sm shadow-sm ring-1 ring-gray-950/5 hover:ring-primary-600 dark:bg-gray-900 dark:ring-white/10 dark:hover:ring-primary-400 {{ $canManageStatus ? 'cursor-grab' : '' }}"
                         >
-                            <div class="font-medium text-gray-950 dark:text-white">
-                                {{ $flightRequest->displayLabel() }}
+                            <div class="flex items-center gap-1 font-medium text-gray-950 dark:text-white">
+                                @if (app(CheckFlightReadinessWarning::class)($flightRequest))
+                                    <x-heroicon-o-exclamation-triangle
+                                        class="h-4 w-4 shrink-0 text-danger-500"
+                                        title="Departing soon and not fully ready"
+                                    />
+                                @endif
+                                <span>{{ $flightRequest->displayLabel() }}</span>
                             </div>
 
                             <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
