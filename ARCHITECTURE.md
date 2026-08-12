@@ -1149,6 +1149,18 @@ the loop the spec's original "AI Risk Detection" feature started back in Phase 8
 document type this app has (`Service` quotes, `Quotation`, `Invoice`) now has its own staleness check
 feeding the same list.
 
+**Phase 21 regrouped `QuotationResource`/`InvoiceResource` out of `Operations` and into their own
+`Accounting` sidebar section** — the same `getUrl`/`$navigationGroup` sidebar mechanism every other
+resource already uses, not the custom multi-item `getNavigationItems()` override
+`FlightRequestResource` needed in Phase 13. That override was only necessary there because one resource
+had to contribute *two* sidebar links to the *same* group (My Assigned/All Requests); Quotations and
+Invoices are still one resource, one link each, just sharing a group label the two of them happen to
+both set — plain `$navigationGroup = 'Accounting'` on each is the whole change.
+`$navigationSort` (`1`/`2`) keeps Quotations listed first, matching the order a flight actually produces
+them in — a quotation exists before the invoice generated from it ever can. `Operations` had no other
+resource contributing to it, so the group simply stops appearing in the sidebar rather than being left
+behind half-empty.
+
 ## What NOT to do
 
 - Don't add a model without `BelongsToCompany` unless it's genuinely global (e.g. `Airport`,

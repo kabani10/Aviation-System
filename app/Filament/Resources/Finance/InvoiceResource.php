@@ -31,7 +31,10 @@ class InvoiceResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-banknotes';
 
-    protected static ?string $navigationGroup = 'Operations';
+    // Accounting, not Operations — see QuotationResource's note (Phase 21).
+    protected static ?string $navigationGroup = 'Accounting';
+
+    protected static ?int $navigationSort = 2;
 
     public static function infolist(Infolist $infolist): Infolist
     {

@@ -34,7 +34,14 @@ class QuotationResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-document-currency-dollar';
 
-    protected static ?string $navigationGroup = 'Operations';
+    // Accounting, not Operations — grouped with InvoiceResource (Phase 21)
+    // now that a flight reaching Completed actually produces one of each
+    // for Finance/Management to work from, not just Flight Requests' own
+    // "Operations" territory. Sort ahead of Invoices: a quotation exists
+    // before the invoice generated from it ever can.
+    protected static ?string $navigationGroup = 'Accounting';
+
+    protected static ?int $navigationSort = 1;
 
     public static function infolist(Infolist $infolist): Infolist
     {
