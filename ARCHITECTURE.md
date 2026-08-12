@@ -1058,6 +1058,32 @@ concern from "what's wrong right now", not just a different presentation of the 
 out of this phase, which is about passive *in-app* surfaces, not another notification channel. Worth
 revisiting once these three surfaces are actually in use.
 
+## Customer status updates
+
+**Phase 20** closes the spec's "throughout the process, the user can send the client a flight status" —
+`App\Domain\FlightRequests\Actions\SendFlightStatusUpdate` emails the customer a per-leg, per-service
+status snapshot (`FlightStatusUpdateMail`) and logs it as a `Communication` on the `FlightRequest` itself,
+same `throw a RuntimeException when there's no billing_email` shape `SendQuotation`/`SendInvoice` already
+use.
+
+**Deliberately not a `FlightStatus` transition, unlike every other "Send*" action in the app.**
+`SendQuotation` moves the flight to `QuotationSent`, `SendInvoice` to `Invoiced` — sending a status update
+changes nothing, since "throughout the process, any process" means it has to be callable at any point in
+the lifecycle without implying a step was just completed. This is also why it's wired into
+`HasFlightStatusUpdateAction`, a new trait, rather than folded into `HasFlightRequestReviewActions` or
+`HasFlightExecutionActions` — both of those exist specifically to check something or move `FlightStatus`
+forward, and this does neither.
+
+**Deliberately price-free.** `QuotationMail`/`InvoiceMail` are financial documents and show
+`selling_price`; this one shows only each service's type and status — "is everything on track", not a
+pricing breakdown the customer already has from their quotation. There's no field-level gate to bypass
+here the way `Service`'s own columns need one: `cost`/`selling_price` simply never enter the template at
+all.
+
+**Gated on `flights.manage` only, same as every other flight-lifecycle action** — no extra "must be the
+assigned user" restriction, since no other action in this resource has one either and adding it here alone
+would be an inconsistent, unrequested restriction.
+
 ## Finance
 
 The final phase per the roadmap — invoicing and cross-flight financial reporting, closing out

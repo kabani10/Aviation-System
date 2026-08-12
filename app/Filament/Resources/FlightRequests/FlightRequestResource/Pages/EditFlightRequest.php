@@ -5,6 +5,7 @@ namespace App\Filament\Resources\FlightRequests\FlightRequestResource\Pages;
 use App\Filament\Resources\FlightRequests\FlightRequestResource;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Concerns\HasFlightExecutionActions;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Concerns\HasFlightRequestReviewActions;
+use App\Filament\Resources\FlightRequests\FlightRequestResource\Concerns\HasFlightStatusUpdateAction;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Widgets\FlightItineraryOverview;
 use Filament\Resources\Pages\EditRecord;
 
@@ -13,6 +14,7 @@ class EditFlightRequest extends EditRecord
 {
     use HasFlightExecutionActions;
     use HasFlightRequestReviewActions;
+    use HasFlightStatusUpdateAction;
 
     protected static string $resource = FlightRequestResource::class;
 
@@ -22,6 +24,7 @@ class EditFlightRequest extends EditRecord
             ...parent::getHeaderActions(),
             ...$this->flightRequestReviewHeaderActions(),
             ...$this->flightExecutionHeaderActions(),
+            ...$this->flightStatusUpdateHeaderActions(),
         ];
     }
 
