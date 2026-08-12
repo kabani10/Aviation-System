@@ -2,6 +2,7 @@
 
 namespace App\Domain\Quotations\Actions;
 
+use App\Domain\FlightRequests\Models\FlightLeg;
 use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\Quotations\Enums\QuotationStatus;
 use App\Domain\Quotations\Models\Quotation;
@@ -18,18 +19,30 @@ use Illuminate\Support\Carbon;
  * again (e.g. after a rejected quote gets re-priced) creates a brand new
  * Quotation rather than mutating an old one — multiple quotations per
  * flight are expected, not an error case.
+ *
+ * `$leg`, as of Phase 18, narrows the snapshot to one leg's services
+ * instead of the whole flight — the workflow gap this closes is "generate
+ * a quotation for the full leg or the full request", not just the latter.
+ * Passing null (the default) keeps the original whole-flight behavior.
  */
 class CreateQuotationFromServices
 {
-    public function __invoke(FlightRequest $flightRequest, ?User $createdBy = null, ?string $notes = null, ?Carbon $validUntil = null): Quotation
-    {
+    public function __invoke(
+        FlightRequest $flightRequest,
+        ?User $createdBy = null,
+        ?string $notes = null,
+        ?Carbon $validUntil = null,
+        ?FlightLeg $leg = null,
+    ): Quotation {
         $services = $flightRequest->services()
             ->where('status', '!=', ServiceStatus::Cancelled)
             ->whereNotNull('selling_price')
+            ->when($leg, fn ($query) => $query->where('flight_leg_id', $leg->id))
             ->get();
 
         $quotation = Quotation::create([
             'flight_request_id' => $flightRequest->id,
+            'flight_leg_id' => $leg?->id,
             'status' => QuotationStatus::Draft,
             'created_by' => $createdBy?->id,
             'notes' => $notes,

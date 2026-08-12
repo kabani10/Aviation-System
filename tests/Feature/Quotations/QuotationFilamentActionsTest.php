@@ -81,6 +81,47 @@ it('hides quotation workflow actions from a view-only role', function () {
         ->assertTableActionHidden('send', $quotation);
 });
 
+it('generates a quotation scoped to one leg when picked in the form', function () {
+    $company = Company::factory()->create();
+    $sales = salesUserFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    $legOne = $flightRequest->legs->first();
+    $legTwo = $flightRequest->legs()->create([
+        'sequence' => 2,
+        'origin_airport_id' => $legOne->destination_airport_id,
+        'destination_airport_id' => $legOne->origin_airport_id,
+    ]);
+    Service::factory()->for($flightRequest)->create(['flight_leg_id' => $legOne->id, 'selling_price' => 400]);
+    Service::factory()->for($flightRequest)->create(['flight_leg_id' => $legTwo->id, 'selling_price' => 600]);
+
+    Livewire::actingAs($sales)
+        ->test(QuotationsRelationManager::class, ['ownerRecord' => $flightRequest, 'pageClass' => EditFlightRequest::class])
+        ->callTableAction('generate', data: ['flight_leg_id' => $legOne->id])
+        ->assertHasNoTableActionErrors();
+
+    $quotation = $flightRequest->quotations()->first();
+    expect($quotation->flight_leg_id)->toBe($legOne->id);
+    expect($quotation->lineItems)->toHaveCount(1);
+    expect($quotation->totalSellingPrice())->toBe(400.0);
+});
+
+it('rejects a leg id submitted directly that does not belong to this flight', function () {
+    $company = Company::factory()->create();
+    $sales = salesUserFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    Service::factory()->for($flightRequest)->create(['selling_price' => 500]);
+    $otherFlightsLeg = FlightRequest::factory()->create()->legs->first();
+
+    Livewire::actingAs($sales)
+        ->test(QuotationsRelationManager::class, ['ownerRecord' => $flightRequest, 'pageClass' => EditFlightRequest::class])
+        ->callTableAction('generate', data: ['flight_leg_id' => $otherFlightsLeg->id])
+        ->assertHasTableActionErrors(['flight_leg_id']);
+});
+
 it('never shows one company\'s quotations to another company on the standalone resource', function () {
     $companyA = Company::factory()->create();
     $companyB = Company::factory()->create();

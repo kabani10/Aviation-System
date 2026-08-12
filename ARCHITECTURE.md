@@ -967,6 +967,26 @@ that can go stale" principle as everywhere else; `isExpired()` and this risk fin
 surface it, and Phase 9's daily digest picks it up for free through the same `CheckOperationalRisks`
 call `BuildFlightRequestDigest` already makes.
 
+**Phase 18 lets `CreateQuotationFromServices` scope to one leg instead of always the whole flight** —
+closing the "generate a quotation for the full leg or the full request" gap in the original workflow ask.
+`Quotation` gained a nullable `flight_leg_id` (null means the original whole-flight behavior); when set,
+the services snapshot is additionally filtered to that leg (`->where('flight_leg_id', $leg->id)`) before
+becoming line items. **Stored on the `Quotation`, not inferred from its `lineItems`** — a whole-flight
+quotation whose services all happen to sit on one leg would otherwise be indistinguishable from a
+deliberately leg-scoped one by inspecting line items alone, and that ambiguity is exactly the kind of
+"looks derivable but actually isn't" trap worth a real column instead. `displayLabel()` and the customer
+mail (`mail.quotation`) both reflect the scope — the email lists only the scoped leg's route/departure
+instead of every leg on the flight when `flight_leg_id` is set, so a leg-scoped quotation doesn't
+reference stops the customer isn't being quoted for. (Fixed a latent null-safety gap in the same template
+while touching it: a leg's `departure_at` can be null — see "Flight legs" above — and the old
+`->toDayDateTimeString()` call had no guard for that case.)
+
+**`QuotationsRelationManager`'s "Generate" form gained a `flight_leg_id` Select**, options narrowed to legs
+that actually have at least one priceable service — no point offering a scope that would generate an empty
+quotation. Same "the options list is a UI convenience, not the actual boundary" pattern as
+`ServicesRelationManager`'s own `flight_leg_id` field: a leg id submitted directly that doesn't belong to
+this flight is still rejected server-side via a form `rule()`, regardless of what the picker offered.
+
 ## Flight execution
 
 `FlightStatus`'s `Confirmed → InOperation → Completed → Invoiced → Closed` tail has existed since Phase

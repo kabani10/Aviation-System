@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers;
 
+use App\Domain\FlightRequests\Models\FlightLeg;
 use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\Quotations\Actions\CreateQuotationFromServices;
 use App\Domain\Quotations\Actions\RecordQuotationResponse;
@@ -9,7 +10,9 @@ use App\Domain\Quotations\Actions\SendQuotation;
 use App\Domain\Quotations\Enums\QuotationStatus;
 use App\Domain\Quotations\Models\Quotation;
 use App\Domain\Services\Enums\ServiceStatus;
+use Closure;
 use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
 use Filament\Resources\RelationManagers\RelationManager;
@@ -17,6 +20,7 @@ use Filament\Tables\Actions\Action;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use RuntimeException;
 
@@ -26,6 +30,13 @@ use RuntimeException;
  * pipeline view of the same records). Multiple quotations per flight are
  * expected, not an edge case: a rejected quote gets superseded by a fresh
  * one after re-pricing, and both stay visible here.
+ *
+ * "Generate" can scope to one leg instead of the whole flight (Phase 18) —
+ * the leg picker's options are narrowed to legs that actually have
+ * priceable services (same "options list is a convenience, not the
+ * boundary" pattern as ServicesRelationManager's own flight_leg_id field —
+ * a server-side rule still rejects a leg that doesn't belong to this
+ * flight, even though the picker never offers one).
  */
 class QuotationsRelationManager extends RelationManager
 {
@@ -37,6 +48,9 @@ class QuotationsRelationManager extends RelationManager
     {
         return $table
             ->columns([
+                TextColumn::make('scope')
+                    ->label('Scope')
+                    ->state(fn (Quotation $record): string => $record->flightLeg?->displayLabel() ?? 'Whole flight'),
                 TextColumn::make('status')
                     ->badge()
                     ->formatStateUsing(fn (QuotationStatus $state): string => $state->label())
@@ -63,6 +77,25 @@ class QuotationsRelationManager extends RelationManager
                     ->icon('heroicon-o-document-plus')
                     ->visible(fn (): bool => Auth::user()->can('quotations.manage') && $this->hasPriceableServices())
                     ->form([
+                        Select::make('flight_leg_id')
+                            ->label('Scope')
+                            ->native(false)
+                            ->placeholder('Whole flight')
+                            ->helperText('Leave blank to include every priced service on the flight, or pick one leg to quote just that leg.')
+                            ->options(fn (): array => $this->legsWithPriceableServices()
+                                ->mapWithKeys(fn (FlightLeg $leg): array => [$leg->id => $leg->displayLabel()])
+                                ->all())
+                            // The options list above is a UI convenience, not
+                            // the actual boundary — same principle as
+                            // ServicesRelationManager's own flight_leg_id field.
+                            ->rule(fn (): Closure => function (string $attribute, $value, Closure $fail): void {
+                                /** @var FlightRequest $flightRequest */
+                                $flightRequest = $this->getOwnerRecord();
+
+                                if ($value && ! $flightRequest->legs()->where('id', $value)->exists()) {
+                                    $fail('This leg does not belong to this flight.');
+                                }
+                            }),
                         Textarea::make('notes')->rows(2),
                         DateTimePicker::make('valid_until')->native(false)->helperText('Leave blank if this quote does not expire.'),
                     ])
@@ -75,6 +108,7 @@ class QuotationsRelationManager extends RelationManager
                             Auth::user(),
                             $data['notes'] ?: null,
                             $data['valid_until'] ? Carbon::parse($data['valid_until']) : null,
+                            $data['flight_leg_id'] ? FlightLeg::query()->find($data['flight_leg_id']) : null,
                         );
                     })
                     ->successNotificationTitle('Quotation generated'),
@@ -127,5 +161,18 @@ class QuotationsRelationManager extends RelationManager
             ->where('status', '!=', ServiceStatus::Cancelled)
             ->whereNotNull('selling_price')
             ->exists();
+    }
+
+    /** @return Collection<int, FlightLeg> only legs with at least one priceable service — no point offering an empty scope. */
+    private function legsWithPriceableServices(): Collection
+    {
+        /** @var FlightRequest $flightRequest */
+        $flightRequest = $this->getOwnerRecord();
+
+        return $flightRequest->legs()
+            ->whereHas('services', fn ($query) => $query
+                ->where('status', '!=', ServiceStatus::Cancelled)
+                ->whereNotNull('selling_price'))
+            ->get();
     }
 }

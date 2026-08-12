@@ -3,6 +3,7 @@
 namespace App\Domain\Quotations\Models;
 
 use App\Domain\Communications\Concerns\HasCommunications;
+use App\Domain\FlightRequests\Models\FlightLeg;
 use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\Quotations\Enums\QuotationStatus;
 use App\Domain\Shared\Concerns\BelongsToCompany;
@@ -24,8 +25,15 @@ use Spatie\Activitylog\Support\LogOptions;
  * change if someone edits a Service's selling_price afterward. Multiple
  * quotations per flight are allowed (a rejected quote gets superseded by a
  * new one, not edited in place) — history stays intact.
+ *
+ * `flight_leg_id` is null for a whole-flight quotation (the original,
+ * still-default behavior) or set when CreateQuotationFromServices was
+ * scoped to one leg instead (Phase 18) — see that action. Stored rather
+ * than inferred from `lineItems`, since a whole-flight quotation whose
+ * services all happen to sit on one leg is indistinguishable from a
+ * deliberately leg-scoped one by inspecting line items alone.
  */
-#[Fillable(['flight_request_id', 'status', 'created_by', 'valid_until', 'sent_at', 'responded_at', 'notes'])]
+#[Fillable(['flight_request_id', 'flight_leg_id', 'status', 'created_by', 'valid_until', 'sent_at', 'responded_at', 'notes'])]
 class Quotation extends Model
 {
     use BelongsToCompany, HasCommunications, HasFactory, LogsActivity;
@@ -43,6 +51,11 @@ class Quotation extends Model
     public function flightRequest(): BelongsTo
     {
         return $this->belongsTo(FlightRequest::class);
+    }
+
+    public function flightLeg(): BelongsTo
+    {
+        return $this->belongsTo(FlightLeg::class);
     }
 
     public function createdBy(): BelongsTo
@@ -86,7 +99,9 @@ class Quotation extends Model
 
     public function displayLabel(): string
     {
-        return "Quotation for {$this->flightRequest->displayLabel()} ({$this->status->label()})";
+        $scope = $this->flightLeg ? " — {$this->flightLeg->displayLabel()}" : '';
+
+        return "Quotation for {$this->flightRequest->displayLabel()}{$scope} ({$this->status->label()})";
     }
 
     public function getActivitylogOptions(): LogOptions

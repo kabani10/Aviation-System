@@ -4,11 +4,13 @@
 
 <ul>
     <li><strong>Flight:</strong> {{ $quotation->flightRequest->displayLabel() }}</li>
-    @foreach ($quotation->flightRequest->legs as $leg)
+    @foreach ($quotation->flightLeg ? [$quotation->flightLeg] : $quotation->flightRequest->legs as $leg)
         <li>
             <strong>Leg {{ $leg->sequence }}:</strong>
-            {{ $leg->originAirport->icao_code }} &rarr; {{ $leg->destinationAirport->icao_code }},
-            departing {{ $leg->departure_at->toDayDateTimeString() }}
+            {{ $leg->originAirport->icao_code }} &rarr; {{ $leg->destinationAirport->icao_code }}
+            @if ($leg->departure_at)
+                , departing {{ $leg->departure_at->toDayDateTimeString() }}
+            @endif
         </li>
     @endforeach
 </ul>

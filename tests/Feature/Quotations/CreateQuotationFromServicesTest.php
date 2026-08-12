@@ -92,3 +92,47 @@ it('creates a brand new quotation each time rather than mutating an old one', fu
     expect($first->id)->not->toBe($second->id);
     expect($flightRequest->quotations()->count())->toBe(2);
 });
+
+it('scopes the snapshot to one leg when given, excluding the other legs\' services', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    $legOne = $flightRequest->legs->first();
+    $legTwo = $flightRequest->legs()->create([
+        'sequence' => 2,
+        'origin_airport_id' => $legOne->destination_airport_id,
+        'destination_airport_id' => $legOne->origin_airport_id,
+    ]);
+
+    $onLegOne = Service::factory()->for($flightRequest)->create(['flight_leg_id' => $legOne->id, 'selling_price' => 400]);
+    Service::factory()->for($flightRequest)->create(['flight_leg_id' => $legTwo->id, 'selling_price' => 600]);
+
+    $quotation = app(CreateQuotationFromServices::class)($flightRequest, leg: $legOne);
+
+    expect($quotation->flight_leg_id)->toBe($legOne->id);
+    expect($quotation->lineItems)->toHaveCount(1);
+    expect($quotation->lineItems->first()->service_id)->toBe($onLegOne->id);
+    expect($quotation->totalSellingPrice())->toBe(400.0);
+});
+
+it('leaves flight_leg_id null and includes every leg\'s services when no leg is given', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create();
+    $legOne = $flightRequest->legs->first();
+    $legTwo = $flightRequest->legs()->create([
+        'sequence' => 2,
+        'origin_airport_id' => $legOne->destination_airport_id,
+        'destination_airport_id' => $legOne->origin_airport_id,
+    ]);
+
+    Service::factory()->for($flightRequest)->create(['flight_leg_id' => $legOne->id, 'selling_price' => 400]);
+    Service::factory()->for($flightRequest)->create(['flight_leg_id' => $legTwo->id, 'selling_price' => 600]);
+
+    $quotation = app(CreateQuotationFromServices::class)($flightRequest);
+
+    expect($quotation->flight_leg_id)->toBeNull();
+    expect($quotation->lineItems)->toHaveCount(2);
+});
