@@ -2,8 +2,6 @@
 
 use App\Domain\Tenancy\Models\Company;
 use App\Models\User;
-use Database\Seeders\ReferenceDataSeeder;
-use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -18,15 +16,11 @@ use Tests\TestCase;
 |
 */
 
+// Roles/permissions and reference data (countries/airports) are seeded once
+// for the whole run by TestCase's $seed/$seeder properties, not per test —
+// see the docblock there.
 pest()->extend(TestCase::class)
     ->use(RefreshDatabase::class)
-    // Roles/permissions and reference data (countries/airports) are the same
-    // for every tenant, so every Feature test gets them for free instead of
-    // re-seeding per test.
-    ->beforeEach(function () {
-        $this->seed(RolesAndPermissionsSeeder::class);
-        $this->seed(ReferenceDataSeeder::class);
-    })
     ->in('Feature');
 
 /*
@@ -56,10 +50,10 @@ expect()->extend('toBeOne', function () {
 */
 
 /**
- * An Admin belonging to $company, with 2FA already confirmed — most tests
- * aren't about 2FA and would otherwise get redirected to the setup page on
- * every panel request. Pair with ->withSession(['2fa_passed' => true]) to
- * also clear the post-login challenge.
+ * An Admin belonging to $company, with 2FA already confirmed — Admin
+ * accounts aren't required to have 2FA enabled, but plenty of tests want a
+ * realistic one that does. Pair with ->withSession(['2fa_passed' => true])
+ * so EnsureTwoFactorChallengeCompleted doesn't stop it at the challenge.
  */
 function adminFor(Company $company): User
 {

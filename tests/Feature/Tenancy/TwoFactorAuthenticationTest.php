@@ -6,16 +6,14 @@ use App\Models\User;
 use Livewire\Livewire;
 use PragmaRX\Google2FA\Google2FA;
 
-it('forces an unconfirmed Admin to the setup page instead of the dashboard', function () {
+it('does not force 2FA setup on Admin or any other role', function () {
     $admin = User::factory()->for(Company::factory())->create();
     $admin->assignRole('Admin');
 
     $this->actingAs($admin)
         ->get('/admin')
-        ->assertRedirect('/admin/two-factor-authentication');
-});
+        ->assertOk();
 
-it('does not force 2FA setup on non-admin roles', function () {
     $sales = User::factory()->for(Company::factory())->create();
     $sales->assignRole('Sales');
 

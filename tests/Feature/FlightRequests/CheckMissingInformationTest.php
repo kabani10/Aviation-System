@@ -34,6 +34,18 @@ it('flags missing passenger count, crew count, and customer billing email', func
     expect($findings->pluck('field'))->toContain('passenger_count', 'crew_count', 'customer.billing_email');
 });
 
+it('flags a missing customer without also flagging a missing billing email for it', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create(['customer_id' => null, 'aircraft_id' => null]);
+
+    $findings = app(CheckMissingInformation::class)($flightRequest);
+
+    expect($findings->pluck('field'))->toContain('customer_id', 'aircraft_id');
+    expect($findings->pluck('field'))->not->toContain('customer.billing_email');
+});
+
 it('flags a leg with a missing departure or arrival time', function () {
     $company = Company::factory()->create();
     app(CurrentCompany::class)->set($company->id);

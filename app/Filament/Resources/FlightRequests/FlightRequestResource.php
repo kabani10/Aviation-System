@@ -16,6 +16,7 @@ use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\ServicesRelationManager;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\RelationManagers\SupplierInquiriesRelationManager;
 use Closure;
+use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -62,7 +63,19 @@ class FlightRequestResource extends Resource
                 ->preload()
                 // Changing customer invalidates whatever aircraft was picked
                 // for the previous one.
-                ->afterStateUpdated(fn (callable $set) => $set('aircraft_id', null)),
+                ->afterStateUpdated(fn (callable $set) => $set('aircraft_id', null))
+                // Lets an operator resolve a CheckMissingInformation "no
+                // customer identified" finding without leaving this page —
+                // an AI-drafted request (see CreateFlightRequestFromExtraction)
+                // can land here with customer_id null because the sender
+                // wasn't a known customer, not because the request itself
+                // is bad. ->relationship() creates via Customer::create(),
+                // so BelongsToCompany's creating() hook fills company_id the
+                // same as it does for every other creation path.
+                ->createOptionForm([
+                    TextInput::make('name')->required()->maxLength(255),
+                    TextInput::make('billing_email')->email()->maxLength(255),
+                ]),
 
             Select::make('aircraft_id')
                 ->label('Aircraft')
@@ -84,7 +97,30 @@ class FlightRequestResource extends Resource
                     if ($value && ! Aircraft::query()->where('id', $value)->where('customer_id', $get('customer_id'))->exists()) {
                         $fail('This aircraft does not belong to the selected customer.');
                     }
-                }),
+                })
+                // Not a ->relationship() Select (options are filtered by
+                // customer_id, not a native belongsTo binding), so creation
+                // needs its own closure — createOptionUsing must return the
+                // new record's key for the field to auto-select it. callsign
+                // is prefilled as a starting guess: on an AI-drafted request
+                // it's often the aircraft's own registration/tail number
+                // (see the real-world example in ARCHITECTURE.md's Phase 22
+                // notes), not something to assume is correct.
+                ->createOptionForm([
+                    TextInput::make('registration')
+                        ->required()
+                        ->maxLength(255)
+                        ->default(fn (Get $get): ?string => $get('callsign')),
+                    TextInput::make('aircraft_type')->required()->maxLength(255),
+                ])
+                ->createOptionUsing(function (array $data, Get $get): int {
+                    return Aircraft::create([
+                        'customer_id' => $get('customer_id'),
+                        'registration' => $data['registration'],
+                        'aircraft_type' => $data['aircraft_type'],
+                    ])->id;
+                })
+                ->createOptionAction(fn (FormAction $action, Get $get): FormAction => $action->disabled(! $get('customer_id'))),
 
             TextInput::make('callsign')
                 ->maxLength(255),
@@ -94,24 +130,29 @@ class FlightRequestResource extends Resource
             // splits this data on save). Shown only while creating, as a
             // convenience for the common one-leg case; editing an existing
             // flight's route (or adding a second leg) happens on the Legs
-            // tab instead, where "which leg" is unambiguous. Plain ->options()
-            // rather than ->relationship() — this field has no matching
-            // relation on FlightRequest itself to bind to.
+            // tab instead, where "which leg" is unambiguous. Plain
+            // ->getSearchResultsUsing() rather than ->relationship() — this
+            // field has no matching relation on FlightRequest itself to
+            // bind to. Async search, not ->options()+->preload(): with
+            // ~10k airports (see database/data/README.md) preloading every
+            // row into the page would ship ~1MB of Alpine state per field —
+            // exactly the kind of page-weight regression this dataset
+            // expansion needs to avoid, not just its trigger.
             Select::make('origin_airport_id')
                 ->label('Origin')
-                ->options(fn (): array => Airport::query()->pluck('icao_code', 'id')->all())
-                ->required()
                 ->searchable()
-                ->preload()
+                ->getSearchResultsUsing(fn (string $search): array => self::searchAirports($search))
+                ->getOptionLabelUsing(fn ($value): ?string => Airport::find($value)?->displayLabel())
+                ->required()
                 ->visible(fn (string $operation): bool => $operation === 'create')
                 ->dehydrated(fn (string $operation): bool => $operation === 'create'),
 
             Select::make('destination_airport_id')
                 ->label('Destination')
-                ->options(fn (): array => Airport::query()->pluck('icao_code', 'id')->all())
-                ->required()
                 ->searchable()
-                ->preload()
+                ->getSearchResultsUsing(fn (string $search): array => self::searchAirports($search))
+                ->getOptionLabelUsing(fn ($value): ?string => Airport::find($value)?->displayLabel())
+                ->required()
                 ->visible(fn (string $operation): bool => $operation === 'create')
                 ->dehydrated(fn (string $operation): bool => $operation === 'create'),
 
@@ -281,5 +322,20 @@ class FlightRequestResource extends Resource
                 ->sort(2)
                 ->url(static::getUrl('index')),
         ];
+    }
+
+    /** @return array<int, string> */
+    private static function searchAirports(string $search): array
+    {
+        return Airport::query()
+            ->where(fn (Builder $query): Builder => $query
+                ->where('icao_code', 'ilike', "%{$search}%")
+                ->orWhere('iata_code', 'ilike', "%{$search}%")
+                ->orWhere('name', 'ilike', "%{$search}%")
+                ->orWhere('city', 'ilike', "%{$search}%"))
+            ->limit(50)
+            ->get()
+            ->mapWithKeys(fn (Airport $airport): array => [$airport->id => $airport->displayLabel()])
+            ->all();
     }
 }

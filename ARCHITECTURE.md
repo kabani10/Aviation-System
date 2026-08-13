@@ -101,19 +101,20 @@ source of truth for what each role can do, not scattered `can()` checks invented
 ## Two-factor authentication
 
 TOTP (`pragmarx/google2fa` + `bacon/bacon-qr-code` for the QR image, rendered as inline SVG — no
-external network call). Enforced for the **Admin** role specifically, not optional-everywhere: Admin
-bypasses every permission check (`Gate::before` in `AppServiceProvider`), so it's the one role with no
-lesser-privileged fallback if the account is compromised.
+external network call). Available to every account (`App\Filament\Pages\TwoFactorAuthentication`,
+reachable from the user menu), voluntary for all of them — **not** mandatory for Admin, reversing the
+original Phase 1/2 decision at the user's explicit request once it got in the way of local testing with
+no authenticator device on hand. `RequireTwoFactorForAdmins`, the middleware that used to force an
+unconfirmed Admin to the setup page before reaching anything else in the panel, is gone entirely (deleted,
+not just unregistered — nothing else referenced it).
 
-Two middleware, both in `AdminPanelProvider`'s `authMiddleware`, in this order:
+One middleware remains in `AdminPanelProvider`'s `authMiddleware`:
 
-1. **`RequireTwoFactorForAdmins`** — an Admin with no confirmed 2FA is redirected to the setup page
-   (`App\Filament\Pages\TwoFactorAuthentication`) before reaching anything else in the panel.
-2. **`EnsureTwoFactorChallengeCompleted`** — anyone with 2FA enabled must pass a post-login code
-   challenge (`/two-factor-challenge`, outside the panel) once per session before proceeding.
-   Filament's `Login` page calls `Auth::attempt()` directly (full session established immediately) —
-   there's no "authenticated but not yet 2FA-cleared" state to hook into upstream, so this is
-   enforced downstream instead, gated on `session('2fa_passed')`.
+- **`EnsureTwoFactorChallengeCompleted`** — anyone who *has* enabled 2FA (voluntarily) must still pass a
+  post-login code challenge (`/two-factor-challenge`, outside the panel) once per session before
+  proceeding. Filament's `Login` page calls `Auth::attempt()` directly (full session established
+  immediately) — there's no "authenticated but not yet 2FA-cleared" state to hook into upstream, so
+  this is enforced downstream instead, gated on `session('2fa_passed')`.
 
 That session key is cleared on every `Illuminate\Auth\Events\Login` (see `AppServiceProvider`) —
 without that, a session cookie planted before login (session fixation) would carry a stale
@@ -121,6 +122,12 @@ without that, a session cookie planted before login (session fixation) would car
 
 Recovery codes are consumed on use (removed from the stored array), and 2FA state changes
 (enabled/disabled/recovery code used) are written to the activity log explicitly — see below.
+
+**Worth reconsidering later**: Admin still bypasses every permission check (`Gate::before` in
+`AppServiceProvider`), so it remains the one role with no lesser-privileged fallback if the account is
+compromised — the original reasoning for requiring 2FA there hasn't gone away, just deprioritized for
+now. Re-enabling it is a one-line change: reinstate a `RequireTwoFactorForAdmins`-equivalent middleware in
+`AdminPanelProvider` (the class itself was deleted, so it'd need rebuilding, not just uncommenting).
 
 ## Audit logging
 
@@ -207,10 +214,33 @@ section was written in Phase 3 — see Suppliers below.
 **`Country` and `Airport`** (`app/Domain/ReferenceData`) are shared across every tenant — deliberately
 *not* `BelongsToCompany`. There's no Filament resource for either in the tenant panel: since they're
 genuinely global, giving any tenant's Admin a CRUD screen for them would let one company's edits corrupt
-what every other tenant reads. They're seeder-managed (`ReferenceDataSeeder`, a starting set of major
-business-aviation hubs, not an exhaustive import — extend the list as real usage needs airports it's
-missing) and exposed read-only wherever a picker is needed (`Supplier`'s "airports covered"). If a
-platform-operator admin panel is ever built, that's where Country/Airport CRUD belongs — not here.
+what every other tenant reads. They're seeder-managed (`ReferenceDataSeeder`) and exposed read-only
+wherever a picker is needed (`Supplier`'s "airports covered"). If a platform-operator admin panel is
+ever built, that's where Country/Airport CRUD belongs — not here.
+
+**As of Phase 22, `Airport` is a near-complete global import (~10k airports, ~249 countries), not a
+hand-picked list.** The original ~39-airport seed only covered major business-aviation hubs; a real
+inbound email addressed to Budapest/Bratislava (LHBP/LZIB) failed to auto-create a flight request purely
+because those airports weren't seeded, not because of anything wrong with the extraction. `database/data/
+{countries,airports}.csv` are a filtered, bundled snapshot of the public-domain OurAirports dataset (see
+`database/data/README.md` for the filter and how to refresh it) — bundled rather than fetched live, since
+airports rarely change and a runtime API call would add latency/cost/a failure mode to every extraction
+for no benefit. `ReferenceDataSeeder` bulk-`upsert`s from these files (chunked, raw query builder, not
+per-row `Eloquent::create()` — at ~10k rows that overhead is real). Every Filament `Select` over `Airport`
+had to drop `->preload()` in favor of `->searchable()` (`->relationship()` fields) or an explicit
+`->getSearchResultsUsing()` (plain `->options()` fields, see `FlightRequestResource::searchAirports()`) —
+preloading ~10k rows into a page's Alpine state was adding roughly 1MB per field to page weight, exactly
+the kind of load-time regression this larger dataset needs to avoid causing, not just be the trigger for.
+
+**Seeded once per test run, not once per test.** `tests/Pest.php` used to reseed roles/permissions and
+reference data in `beforeEach` for every Feature test — fine at 39 airports, not at 10k. `RefreshDatabase`
+runs `migrate:fresh` (optionally `--seeder=X`) exactly once per test run, strictly before the per-test
+transaction that wraps (and rolls back) each individual test begins; anything seeded during that one-time
+step is committed outside every test's transaction and stays visible for the whole run without being
+re-inserted. `Tests\TestCase` now sets `$seed = true` / `$seeder = DatabaseSeeder::class` to use exactly
+that mechanism, and `Pest.php`'s `beforeEach` no longer seeds anything itself. This only works because
+nothing in the suite mutates `Country`/`Airport` rows — if a test ever needs to, it should create its own
+via the factories, not rely on the shared seeded set staying exactly as seeded.
 
 **`App\Domain\Suppliers\Models\Supplier`** — a vendor the tenant works with (ground handling, fuel,
 permits, ...), same shape as `Customer`: its own contacts (`SupplierContact` via `ContactsRelationManager`),
@@ -534,21 +564,35 @@ missing `tool_use` block as a `ClaudeApiException`, not something to unwrap and 
   just doesn't become a draft automatically. This is also why `ANTHROPIC_API_KEY` being blank (the
   `.env.example`/CI default) doesn't break anything — extraction silently no-ops instead of failing
   the request that logged the email in the first place.
-- **`CreateFlightRequestFromExtraction`** is the confidence gate. It's confident only when the
-  customer and aircraft both resolved to real rows (aircraft belonging to that customer) *and*
-  `resolveLegs()` resolved every extracted leg — both airport codes matched a real `Airport`,
-  departure/arrival both parsed, arrival after departure — for every single leg, not just the first.
-  One bad leg fails the whole extraction; there's no such thing as a `FlightRequest` created with some
-  legs missing. When confident: creates the `FlightRequest` (`source: Email`, `reviewed_at: null`,
-  `extraction_metadata` holding the raw tool input for later "why did it fill this in this way"
-  debugging) and **moves the Communication onto it** — `communicable_type`/`communicable_id` aren't in
-  `Communication`'s `#[Fillable]` list, so this is a direct property assignment + `save()`, not
-  `update()`. This is the "matching an email to the right flight" step that the Documents &
-  communications section above flagged as blocked until this phase existed. When not confident: the
-  raw extraction is stashed on the Communication's own `metadata['ai_extraction']` instead, and the
-  Communication stays exactly where `ReceiveInboundEmail` put it (on the `Company`) — there's no
-  review-queue UI for these yet, an operator has to know to look at the Communication's metadata.
-  Worth building once this is actually used enough for that to be a real friction point, not before.
+- **`CreateFlightRequestFromExtraction`** is the confidence gate — **as of Phase 22, only
+  `resolveLegs()` resolving every extracted leg is required**, not the customer/aircraft too. One bad
+  leg still fails the whole extraction (both airport codes must match a real `Airport`, departure/arrival
+  both parsed, arrival after departure — for every single leg, not just the first; there's no such thing
+  as a `FlightRequest` created with some legs missing), since airports are shared reference data an
+  operator can't spin up inline the way a customer or aircraft can. Customer and aircraft are each
+  independently optional: an unmatched one is simply left `null` on the created `FlightRequest`
+  (`customer_id`/`aircraft_id` are nullable columns as of Phase 22) rather than blocking creation
+  entirely. If both resolved but the aircraft doesn't belong to the resolved customer, *both* are
+  dropped to `null` — a wrong pairing is worse than an admittedly-missing one. Whenever legs resolve, the
+  `FlightRequest` is created (`source: Email`, `reviewed_at: null`, `extraction_metadata` holding the raw
+  tool input for later "why did it fill this in this way" debugging) and the Communication is **always**
+  moved onto it — `communicable_type`/`communicable_id` aren't in `Communication`'s `#[Fillable]` list, so
+  this is a direct property assignment + `save()`, not `update()`. This is the "matching an email to the
+  right flight" step that the Documents & communications section above flagged as blocked until this
+  phase existed. Only when there are no legs at all (or none resolve) is nothing created: the raw
+  extraction is stashed on the Communication's own `metadata['ai_extraction']`, and the Communication
+  stays exactly where `ReceiveInboundEmail` put it (on the `Company`).
+
+  **Why this changed from the original all-or-nothing gate:** a real inbound email (a genuine new-customer
+  charter request, route and dates all clear) was silently going nowhere because the sender wasn't yet a
+  known `Customer` — the extraction was thrown away entirely and the email sat invisible on the Company
+  with no signal to any operator that it existed. `CheckMissingInformation` (below) now flags a `null`
+  `customer_id`/`aircraft_id` the same way it flags a missing passenger count, and
+  `FlightRequestResource`'s `customer_id`/`aircraft_id` `Select`s carry `->createOptionForm()` (the
+  aircraft one also needs a custom `->createOptionUsing()`/`->createOptionAction()` since it's a plain
+  `->options()` field scoped by the currently-selected customer, not a `->relationship()` one) so an
+  operator resolves either gap in place, from the review page, instead of bouncing to `CustomerResource`/
+  `AircraftResource` and back.
 
 **`RequestSource` and `needsReview()`.** `FlightRequest.source` is `manual` (the DB default, every
 existing creation path) or `email`. `needsReview(): bool` is `source === Email && reviewed_at === null`
@@ -596,6 +640,11 @@ call can fail, time out, or return something to validate — and there's no such
 routing it through `AI/*` would just be following the spec's feature *name* instead of what the
 feature actually *needs*. Computed on demand rather than stored, since the answer changes as an
 operator fills in gaps — a stored result would go stale the moment someone adds a passenger count.
+
+**Phase 22 added `customer_id`/`aircraft_id` findings**, alongside (not instead of) the existing
+billing-email check — a missing customer and a customer with no billing email are different problems
+with different fixes, so a `null` `customer_id` short-circuits the billing-email check rather than
+firing both ("no customer" already implies "no billing email", saying both is just noise).
 
 **Neither `CheckMissingInformation` nor `CheckOperationalRisks` has a header action on the flight
 request page anymore** — both originally had one (a button opening a modal listing findings, via

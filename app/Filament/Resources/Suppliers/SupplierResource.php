@@ -56,13 +56,15 @@ class SupplierResource extends Resource
                 ->multiple()
                 ->searchable(),
 
+            // No ->preload() — with ~10k airports (see database/data/README.md)
+            // that would ship every row into the page up front. ->relationship()
+            // + ->searchable() alone already gives async, server-side search.
             Select::make('airports')
                 ->label('Airports covered')
                 ->relationship('airports', 'icao_code')
                 ->getOptionLabelFromRecordUsing(fn (Airport $airport): string => $airport->displayLabel())
                 ->multiple()
-                ->searchable()
-                ->preload(),
+                ->searchable(),
 
             Textarea::make('notes')
                 ->rows(3)

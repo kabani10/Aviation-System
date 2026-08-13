@@ -97,6 +97,84 @@ it('creates a draft flight request from a confident extraction and moves the Com
     expect($communication->communicable_id)->toBe($flightRequest->id);
 });
 
+it('creates a flight request with no customer or aircraft when the route resolves but neither matched', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $communication = inboundCommunicationFor($company, 'Charter request', 'New broker, DXB to LHBP next week.');
+
+    fakeClaudeExtraction([
+        'customer_id' => null,
+        'aircraft_id' => null,
+        'callsign' => 'TCGKL',
+        'legs' => [
+            [
+                'origin_airport_code' => 'OMDB',
+                'destination_airport_code' => 'LHBP',
+                'departure_at' => '2026-09-01T09:00:00Z',
+                'arrival_at' => '2026-09-01T15:00:00Z',
+            ],
+        ],
+        'passenger_count' => 6,
+        'crew_count' => 2,
+        'requested_services_summary' => 'Ground handling and catering',
+        'special_instructions' => null,
+        'unclear_points' => ['Sender is not an existing customer', 'Aircraft registration not in the known fleet'],
+    ]);
+
+    ExtractFlightRequestFromEmail::dispatchSync($communication);
+
+    $flightRequest = FlightRequest::query()->where('company_id', $company->id)->first();
+
+    expect($flightRequest)->not->toBeNull();
+    expect($flightRequest->customer_id)->toBeNull();
+    expect($flightRequest->aircraft_id)->toBeNull();
+    expect($flightRequest->needsReview())->toBeTrue();
+    expect($flightRequest->legs)->toHaveCount(1);
+
+    $communication->refresh();
+    expect($communication->communicable_type)->toBe(FlightRequest::class);
+    expect($communication->communicable_id)->toBe($flightRequest->id);
+});
+
+it('drops a resolved aircraft that does not belong to the resolved customer rather than pairing them incorrectly', function () {
+    $company = Company::factory()->create();
+    app(CurrentCompany::class)->set($company->id);
+
+    $customer = Customer::factory()->for($company)->create();
+    $otherCustomer = Customer::factory()->for($company)->create();
+    $mismatchedAircraft = Aircraft::factory()->for($otherCustomer)->create();
+
+    $communication = inboundCommunicationFor($company, 'Handling request', 'We need handling for our flight tomorrow.');
+
+    fakeClaudeExtraction([
+        'customer_id' => $customer->id,
+        'aircraft_id' => $mismatchedAircraft->id,
+        'callsign' => null,
+        'legs' => [
+            [
+                'origin_airport_code' => 'KJFK',
+                'destination_airport_code' => 'EGLL',
+                'departure_at' => '2026-09-01T09:00:00Z',
+                'arrival_at' => '2026-09-01T18:00:00Z',
+            ],
+        ],
+        'passenger_count' => 4,
+        'crew_count' => 2,
+        'requested_services_summary' => null,
+        'special_instructions' => null,
+        'unclear_points' => [],
+    ]);
+
+    ExtractFlightRequestFromEmail::dispatchSync($communication);
+
+    $flightRequest = FlightRequest::query()->where('company_id', $company->id)->first();
+
+    expect($flightRequest)->not->toBeNull();
+    expect($flightRequest->customer_id)->toBeNull();
+    expect($flightRequest->aircraft_id)->toBeNull();
+});
+
 it('creates every extracted leg, in order, for a multi-stop itinerary', function () {
     $company = Company::factory()->create();
     app(CurrentCompany::class)->set($company->id);

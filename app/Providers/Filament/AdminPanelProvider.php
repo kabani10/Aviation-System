@@ -6,7 +6,6 @@ use App\Filament\Pages\TwoFactorAuthentication;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages\EditFlightRequest;
 use App\Filament\Resources\FlightRequests\FlightRequestResource\Pages\ViewFlightRequest;
 use App\Http\Middleware\EnsureTwoFactorChallengeCompleted;
-use App\Http\Middleware\RequireTwoFactorForAdmins;
 use App\Http\Middleware\SetCurrentCompany;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
@@ -99,8 +98,13 @@ class AdminPanelProvider extends PanelProvider
             ->authMiddleware([
                 Authenticate::class,
                 SetCurrentCompany::class,
+                // 2FA itself stays fully available (TwoFactorAuthentication
+                // page, EnsureTwoFactorChallengeCompleted honors it for
+                // whoever opts in) — this just stops *requiring* Admin
+                // accounts to have it before using the panel at all,
+                // reversing the Phase 1/2 decision at the user's explicit
+                // request.
                 EnsureTwoFactorChallengeCompleted::class,
-                RequireTwoFactorForAdmins::class,
             ]);
     }
 }

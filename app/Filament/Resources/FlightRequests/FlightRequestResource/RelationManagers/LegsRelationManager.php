@@ -38,21 +38,22 @@ class LegsRelationManager extends RelationManager
                 ->required()
                 ->default(fn (): int => $this->getOwnerRecord()->legs()->max('sequence') + 1),
 
+            // No ->preload() — with ~10k airports (see database/data/README.md)
+            // that would ship every row into the page up front. ->relationship()
+            // + ->searchable() alone already gives async, server-side search.
             Select::make('origin_airport_id')
                 ->label('Origin')
                 ->relationship('originAirport', 'icao_code')
                 ->getOptionLabelFromRecordUsing(fn ($record): string => $record->displayLabel())
                 ->required()
-                ->searchable()
-                ->preload(),
+                ->searchable(),
 
             Select::make('destination_airport_id')
                 ->label('Destination')
                 ->relationship('destinationAirport', 'icao_code')
                 ->getOptionLabelFromRecordUsing(fn ($record): string => $record->displayLabel())
                 ->required()
-                ->searchable()
-                ->preload(),
+                ->searchable(),
 
             DateTimePicker::make('departure_at')
                 ->required()

@@ -2,106 +2,89 @@
 
 namespace Database\Seeders;
 
-use App\Domain\ReferenceData\Models\Airport;
-use App\Domain\ReferenceData\Models\Country;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\LazyCollection;
 
 /**
- * Global reference data — not tenant-scoped, shared by every company. A
- * starting set of major business-aviation hubs, not an exhaustive import;
- * expand this list as real usage needs airports it's missing. See
- * ARCHITECTURE.md's "Reference data" section for why this is seeder-only
- * and has no Filament CRUD in the tenant panel.
+ * Global reference data — not tenant-scoped, shared by every company. Bulk-
+ * loaded from database/data/{countries,airports}.csv, a filtered snapshot of
+ * the public-domain OurAirports dataset (all countries; airports of type
+ * large/medium/small with a real 4-letter ICAO code — heliports, seaplane
+ * bases, balloonports, and closed airports are excluded as out of scope for
+ * fixed-wing business aviation). See ARCHITECTURE.md's "Reference data"
+ * section for why this is seeder-only and has no Filament CRUD in the
+ * tenant panel, and why it's re-imported wholesale here rather than
+ * maintained as a hand-picked list — see database/data/README.md for how to
+ * refresh the source files.
+ *
+ * Uses raw bulk inserts, not Eloquent::create() per row — at ~10k airport
+ * rows, per-row model instantiation/events would make this seeder (and by
+ * extension every test that seeds reference data) noticeably slower for no
+ * benefit, since neither model has observers or casts worth paying for here.
  */
 class ReferenceDataSeeder extends Seeder
 {
-    private const COUNTRIES = [
-        ['code' => 'US', 'name' => 'United States'],
-        ['code' => 'GB', 'name' => 'United Kingdom'],
-        ['code' => 'FR', 'name' => 'France'],
-        ['code' => 'DE', 'name' => 'Germany'],
-        ['code' => 'CH', 'name' => 'Switzerland'],
-        ['code' => 'IT', 'name' => 'Italy'],
-        ['code' => 'ES', 'name' => 'Spain'],
-        ['code' => 'NL', 'name' => 'Netherlands'],
-        ['code' => 'IE', 'name' => 'Ireland'],
-        ['code' => 'AE', 'name' => 'United Arab Emirates'],
-        ['code' => 'QA', 'name' => 'Qatar'],
-        ['code' => 'SA', 'name' => 'Saudi Arabia'],
-        ['code' => 'EG', 'name' => 'Egypt'],
-        ['code' => 'TR', 'name' => 'Turkey'],
-        ['code' => 'ZA', 'name' => 'South Africa'],
-        ['code' => 'SG', 'name' => 'Singapore'],
-        ['code' => 'JP', 'name' => 'Japan'],
-        ['code' => 'CN', 'name' => 'China'],
-        ['code' => 'HK', 'name' => 'Hong Kong'],
-        ['code' => 'IN', 'name' => 'India'],
-        ['code' => 'AU', 'name' => 'Australia'],
-        ['code' => 'CA', 'name' => 'Canada'],
-        ['code' => 'BR', 'name' => 'Brazil'],
-    ];
-
-    /** [icao, iata, name, city, country_code] */
-    private const AIRPORTS = [
-        ['KJFK', 'JFK', 'John F Kennedy International', 'New York', 'US'],
-        ['KTEB', 'TEB', 'Teterboro', 'Teterboro', 'US'],
-        ['KVNY', 'VNY', 'Van Nuys', 'Los Angeles', 'US'],
-        ['KLAX', 'LAX', 'Los Angeles International', 'Los Angeles', 'US'],
-        ['KMIA', 'MIA', 'Miami International', 'Miami', 'US'],
-        ['KORD', 'ORD', "Chicago O'Hare International", 'Chicago', 'US'],
-        ['KIAD', 'IAD', 'Washington Dulles International', 'Washington', 'US'],
-        ['KBOS', 'BOS', 'Boston Logan International', 'Boston', 'US'],
-        ['KDAL', 'DAL', 'Dallas Love Field', 'Dallas', 'US'],
-        ['KSFO', 'SFO', 'San Francisco International', 'San Francisco', 'US'],
-        ['EGLL', 'LHR', 'London Heathrow', 'London', 'GB'],
-        ['EGGW', 'LTN', 'London Luton', 'London', 'GB'],
-        ['EGKB', 'BQH', 'London Biggin Hill', 'London', 'GB'],
-        ['LFPG', 'CDG', 'Paris Charles de Gaulle', 'Paris', 'FR'],
-        ['LFPB', 'LBG', 'Paris Le Bourget', 'Paris', 'FR'],
-        ['EDDF', 'FRA', 'Frankfurt am Main', 'Frankfurt', 'DE'],
-        ['EDDM', 'MUC', 'Munich', 'Munich', 'DE'],
-        ['LSGG', 'GVA', 'Geneva', 'Geneva', 'CH'],
-        ['LSZH', 'ZRH', 'Zurich', 'Zurich', 'CH'],
-        ['LIRF', 'FCO', 'Rome Fiumicino', 'Rome', 'IT'],
-        ['LEMD', 'MAD', 'Madrid Barajas', 'Madrid', 'ES'],
-        ['EHAM', 'AMS', 'Amsterdam Schiphol', 'Amsterdam', 'NL'],
-        ['EIDW', 'DUB', 'Dublin', 'Dublin', 'IE'],
-        ['OMDB', 'DXB', 'Dubai International', 'Dubai', 'AE'],
-        ['OMDW', 'DWC', 'Dubai World Central', 'Dubai', 'AE'],
-        ['OMAA', 'AUH', 'Abu Dhabi International', 'Abu Dhabi', 'AE'],
-        ['OTHH', 'DOH', 'Hamad International', 'Doha', 'QA'],
-        ['OEJN', 'JED', 'King Abdulaziz International', 'Jeddah', 'SA'],
-        ['HECA', 'CAI', 'Cairo International', 'Cairo', 'EG'],
-        ['LTFM', 'IST', 'Istanbul Airport', 'Istanbul', 'TR'],
-        ['FAJS', 'JNB', 'OR Tambo International', 'Johannesburg', 'ZA'],
-        ['WSSS', 'SIN', 'Singapore Changi', 'Singapore', 'SG'],
-        ['RJTT', 'HND', 'Tokyo Haneda', 'Tokyo', 'JP'],
-        ['ZBAA', 'PEK', 'Beijing Capital International', 'Beijing', 'CN'],
-        ['VHHH', 'HKG', 'Hong Kong International', 'Hong Kong', 'HK'],
-        ['VABB', 'BOM', 'Chhatrapati Shivaji Maharaj International', 'Mumbai', 'IN'],
-        ['YSSY', 'SYD', 'Sydney Kingsford Smith', 'Sydney', 'AU'],
-        ['CYYZ', 'YYZ', 'Toronto Pearson International', 'Toronto', 'CA'],
-        ['SBGR', 'GRU', 'São Paulo/Guarulhos International', 'São Paulo', 'BR'],
-    ];
+    private const CHUNK_SIZE = 1000;
 
     public function run(): void
     {
-        foreach (self::COUNTRIES as $country) {
-            Country::query()->firstOrCreate(['code' => $country['code']], $country);
+        $now = now();
+
+        $countries = LazyCollection::make(function () {
+            yield from $this->readCsv(database_path('data/countries.csv'));
+        })->map(fn (array $row) => [
+            'code' => $row['code'],
+            'name' => $row['name'],
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        foreach ($countries->chunk(self::CHUNK_SIZE) as $chunk) {
+            DB::table('countries')->upsert($chunk->all(), ['code'], ['name', 'updated_at']);
         }
 
-        $countryIds = Country::query()->pluck('id', 'code');
+        $countryIds = DB::table('countries')->pluck('id', 'code');
 
-        foreach (self::AIRPORTS as [$icao, $iata, $name, $city, $countryCode]) {
-            Airport::query()->firstOrCreate(
-                ['icao_code' => $icao],
-                [
-                    'iata_code' => $iata,
-                    'name' => $name,
-                    'city' => $city,
-                    'country_id' => $countryIds[$countryCode],
-                ],
+        $airports = LazyCollection::make(function () use ($countryIds, $now) {
+            foreach ($this->readCsv(database_path('data/airports.csv')) as $row) {
+                $countryId = $countryIds[$row['country_code']] ?? null;
+
+                if ($countryId === null) {
+                    continue;
+                }
+
+                yield [
+                    'icao_code' => $row['icao_code'],
+                    'iata_code' => $row['iata_code'] !== '' ? $row['iata_code'] : null,
+                    'name' => $row['name'],
+                    'city' => $row['city'],
+                    'country_id' => $countryId,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
+        });
+
+        foreach ($airports->chunk(self::CHUNK_SIZE) as $chunk) {
+            DB::table('airports')->upsert(
+                $chunk->all(),
+                ['icao_code'],
+                ['iata_code', 'name', 'city', 'country_id', 'updated_at'],
             );
         }
+    }
+
+    /** @return iterable<int, array<string, string>> */
+    private function readCsv(string $path): iterable
+    {
+        $handle = fopen($path, 'r');
+        $header = fgetcsv($handle);
+
+        while (($row = fgetcsv($handle)) !== false) {
+            yield array_combine($header, $row);
+        }
+
+        fclose($handle);
     }
 }

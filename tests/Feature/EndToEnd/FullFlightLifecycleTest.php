@@ -315,26 +315,21 @@ it('keeps two independently self-registered companies fully isolated across the 
 
     // Full HTTP round trip through the real admin panel, as the registered
     // Admin — proves the panel's own queries (not just the model layer)
-    // never leak across tenants. RequireTwoFactorForAdmins would otherwise
-    // redirect a real freshly-registered Admin to the 2FA setup page on
-    // every request, so confirm it here exactly like the real setup flow
-    // would leave it (see TwoFactorAuthenticationTest). Only one identity's
-    // panel session is exercised per test process — Laravel's test client
-    // shares app/container state across simulated requests within a single
-    // test, and switching the authenticated user mid-test on the *same*
-    // panel guard is unreliable there; the bidirectional check above
-    // (querying the model layer directly under each company's tenant
-    // context) already proves isolation both ways.
-    $adminB->forceFill(['two_factor_secret' => 'test-secret', 'two_factor_confirmed_at' => now()])->save();
-    $panelSession = ['2fa_passed' => true];
-
-    $this->withSession($panelSession)->actingAs($adminB)
+    // never leak across tenants. Admin accounts aren't required to have 2FA
+    // enabled, so a plain actingAs() reaches the panel with no extra setup.
+    // Only one identity's panel session is exercised per test process —
+    // Laravel's test client shares app/container state across simulated
+    // requests within a single test, and switching the authenticated user
+    // mid-test on the *same* panel guard is unreliable there; the
+    // bidirectional check above (querying the model layer directly under
+    // each company's tenant context) already proves isolation both ways.
+    $this->actingAs($adminB)
         ->get('/admin/customers')->assertOk()->assertDontSee('Alpha Test Customer');
-    $this->withSession($panelSession)->actingAs($adminB)
+    $this->actingAs($adminB)
         ->get('/admin/flight-requests')->assertOk()->assertDontSee('N650AA');
-    $this->withSession($panelSession)->actingAs($adminB)
+    $this->actingAs($adminB)
         ->get('/admin/quotations')->assertOk()->assertDontSee('N650AA');
-    $this->withSession($panelSession)->actingAs($adminB)
+    $this->actingAs($adminB)
         ->get('/admin/invoices')->assertOk();
 
     // Financial summaries never blend — each company's Admin sees only its

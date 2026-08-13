@@ -17,16 +17,25 @@ use Exception;
 use Illuminate\Support\Carbon;
 
 /**
- * Turns an extraction into a real FlightRequest — but only when the
- * fields that identify *what's being asked for* (customer, aircraft
- * belonging to that customer, and every extracted leg's origin and
- * destination airport) resolved with confidence. One unresolved leg route
- * fails the whole extraction, same all-or-nothing reasoning as an
- * unresolved customer or aircraft — a flight missing its second leg's
- * route isn't a draft worth auto-creating. Otherwise the raw extraction is
- * stashed on the Communication's metadata for an operator to use when
- * creating the request by hand, and the Communication stays where
- * ReceiveInboundEmail put it (on the Company).
+ * Turns an extraction into a real FlightRequest as soon as every extracted
+ * leg's route (origin and destination airport) resolves — that's the one
+ * hard gate, since airports are shared reference data, not something an
+ * operator can create inline the way a customer or aircraft can. One
+ * unresolved leg route fails the whole extraction: a flight missing its
+ * second leg's route isn't a draft worth auto-creating. If there are no
+ * legs at all, nothing is created; the raw extraction is stashed on the
+ * Communication's metadata for an operator to use when creating the
+ * request by hand, and the Communication stays where ReceiveInboundEmail
+ * put it (on the Company).
+ *
+ * Customer and aircraft are NOT part of that gate — an unmatched customer
+ * or aircraft still produces a real FlightRequest with that field left
+ * null, surfaced by CheckMissingInformation on the review page (Phase 7)
+ * alongside a "Create Customer"/"Create Aircraft" action so an operator
+ * resolves it in place instead of the request being invisible until
+ * someone thinks to check Communications. An aircraft that resolved but
+ * doesn't belong to the resolved customer is treated as if neither
+ * resolved — a wrong pairing is worse than an admittedly-missing one.
  *
  * A leg's departure/arrival times are deliberately NOT part of that gate —
  * "departing tomorrow" with no arrival time is still a real, actionable
@@ -44,10 +53,10 @@ use Illuminate\Support\Carbon;
  * unrecognized or empty service_types list doesn't affect confidence at
  * all, it just means fewer (or no) services get pre-created.
  *
- * When confident, the Communication is also moved onto the new
- * FlightRequest — this is the "matching an email to the right flight"
- * step that ARCHITECTURE.md's Documents & communications section noted
- * couldn't happen until this phase existed.
+ * Whenever a FlightRequest gets created, the Communication is also moved
+ * onto it — this is the "matching an email to the right flight" step that
+ * ARCHITECTURE.md's Documents & communications section noted couldn't
+ * happen until this phase existed.
  */
 class CreateFlightRequestFromExtraction
 {
@@ -57,12 +66,12 @@ class CreateFlightRequestFromExtraction
         $aircraft = $extraction->aircraftId ? Aircraft::query()->find($extraction->aircraftId) : null;
         $legs = $this->resolveLegs($extraction->legs);
 
-        $confident = $customer !== null
-            && $aircraft !== null
-            && $aircraft->customer_id === $customer->id
-            && $legs !== null;
+        if ($customer !== null && $aircraft !== null && $aircraft->customer_id !== $customer->id) {
+            $customer = null;
+            $aircraft = null;
+        }
 
-        if (! $confident) {
+        if ($legs === null) {
             $communication->update([
                 'metadata' => array_merge($communication->metadata ?? [], ['ai_extraction' => $extraction->raw]),
             ]);
@@ -71,8 +80,8 @@ class CreateFlightRequestFromExtraction
         }
 
         $flightRequest = FlightRequest::create([
-            'customer_id' => $customer->id,
-            'aircraft_id' => $aircraft->id,
+            'customer_id' => $customer?->id,
+            'aircraft_id' => $aircraft?->id,
             'callsign' => $extraction->callsign,
             'passenger_count' => $extraction->passengerCount,
             'crew_count' => $extraction->crewCount,

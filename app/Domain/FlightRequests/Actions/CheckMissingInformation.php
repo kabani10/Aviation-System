@@ -46,11 +46,25 @@ class CheckMissingInformation
             ));
         }
 
-        if (! $flightRequest->customer?->billing_email) {
+        if ($flightRequest->customer_id === null) {
+            $findings->push(new MissingInformationFinding(
+                field: 'customer_id',
+                message: 'No customer identified for this request.',
+                why: 'A customer is needed before this request can be quoted or invoiced.',
+            ));
+        } elseif (! $flightRequest->customer?->billing_email) {
             $findings->push(new MissingInformationFinding(
                 field: 'customer.billing_email',
                 message: 'The customer has no billing email on file.',
                 why: 'Needed to send the invoice once the flight is complete.',
+            ));
+        }
+
+        if ($flightRequest->aircraft_id === null) {
+            $findings->push(new MissingInformationFinding(
+                field: 'aircraft_id',
+                message: 'No aircraft identified for this request.',
+                why: 'Needed to check document/permit requirements and match ground handling capacity.',
             ));
         }
 

@@ -1,7 +1,9 @@
 <?php
 
+use App\Domain\Aircraft\Models\Aircraft;
 use App\Domain\Communications\Actions\LogCommunication;
 use App\Domain\Communications\Enums\CommunicationType;
+use App\Domain\Customers\Models\Customer;
 use App\Domain\FlightRequests\Enums\RequestSource;
 use App\Domain\FlightRequests\Models\FlightRequest;
 use App\Domain\Tenancy\Models\Company;
@@ -115,6 +117,41 @@ it('confirms the draft from the review page the same way EditFlightRequest does'
 
     expect($flightRequest->fresh()->reviewed_at)->not->toBeNull();
     expect($flightRequest->fresh()->assignedUsers->pluck('id'))->toContain($sales->id);
+});
+
+it('creates and selects a customer, then an aircraft for that customer, without leaving the review page', function () {
+    $company = Company::factory()->create();
+    $sales = salesUserFor($company);
+    app(CurrentCompany::class)->set($company->id);
+
+    $flightRequest = FlightRequest::factory()->create([
+        'source' => RequestSource::Email,
+        'reviewed_at' => null,
+        'customer_id' => null,
+        'aircraft_id' => null,
+    ]);
+
+    $component = Livewire::actingAs($sales)
+        ->test(ReviewFlightRequest::class, ['record' => $flightRequest->getRouteKey()])
+        ->callFormComponentAction('customer_id', 'createOption', data: [
+            'name' => 'New Charter Broker LLC',
+            'billing_email' => 'ops@newcharterbroker.example',
+        ]);
+
+    $customer = Customer::query()->where('name', 'New Charter Broker LLC')->sole();
+    expect($customer->company_id)->toBe($company->id);
+    expect($customer->billing_email)->toBe('ops@newcharterbroker.example');
+    $component->assertFormSet(['customer_id' => $customer->id]);
+
+    $component->callFormComponentAction('aircraft_id', 'createOption', data: [
+        'registration' => 'N999XX',
+        'aircraft_type' => 'Citation X',
+    ]);
+
+    $aircraft = Aircraft::query()->where('registration', 'N999XX')->sole();
+    expect($aircraft->customer_id)->toBe($customer->id);
+    expect($aircraft->aircraft_type)->toBe('Citation X');
+    $component->assertFormSet(['aircraft_id' => $aircraft->id]);
 });
 
 it('blocks a view-only role from opening the review page at all', function () {
