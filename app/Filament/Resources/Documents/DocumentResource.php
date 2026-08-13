@@ -38,26 +38,32 @@ class DocumentResource extends Resource
     public static function form(Form $form): Form
     {
         return $form->schema([
+            // Mirrors DocumentsRelationManager::form() — see its docblock
+            // for why upload only asks for file + description, with
+            // category/title/expiry left for Edit afterward.
             FileUpload::make('file')
                 ->required()
                 ->storeFiles(false)
                 ->hidden(fn (string $operation): bool => $operation === 'edit'),
 
+            Textarea::make('notes')
+                ->label('Description')
+                ->rows(2),
+
             TextInput::make('category')
-                ->required()
                 ->maxLength(255)
-                ->helperText('e.g. business_license, insurance_certificate — freeform, no fixed list yet.'),
+                ->helperText('e.g. business_license, insurance_certificate — freeform, no fixed list yet.')
+                ->hidden(fn (string $operation): bool => $operation === 'create'),
 
             TextInput::make('title')
                 ->maxLength(255)
-                ->helperText('Defaults to the uploaded filename if left blank.'),
+                ->helperText('Defaults to the uploaded filename if left blank.')
+                ->hidden(fn (string $operation): bool => $operation === 'create'),
 
             DateTimePicker::make('expires_at')
                 ->native(false)
-                ->helperText('Leave blank if this document does not expire.'),
-
-            Textarea::make('notes')
-                ->rows(2),
+                ->helperText('Leave blank if this document does not expire.')
+                ->hidden(fn (string $operation): bool => $operation === 'create'),
         ]);
     }
 

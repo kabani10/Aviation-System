@@ -2,6 +2,7 @@
 
 use App\Domain\Documents\Actions\UploadDocument;
 use App\Domain\Tenancy\Models\Company;
+use App\Filament\RelationManagers\DocumentsRelationManager;
 use App\Filament\Resources\Documents\DocumentResource\Pages\CreateDocument;
 use App\Support\Tenancy\CurrentCompany;
 use Illuminate\Http\UploadedFile;
@@ -28,8 +29,7 @@ it('uploads a document through the panel and stores it on the private disk', fun
         ->test(CreateDocument::class)
         ->fillForm([
             'file' => $file,
-            'category' => 'business_license',
-            'title' => 'Business License 2026',
+            'notes' => 'Renewed for 2026.',
         ])
         ->call('create')
         ->assertHasNoFormErrors();
@@ -37,8 +37,11 @@ it('uploads a document through the panel and stores it on the private disk', fun
     $document = $company->documents()->first();
 
     expect($document)->not->toBeNull();
-    expect($document->category)->toBe('business_license');
-    expect($document->title)->toBe('Business License 2026');
+    // category/title are hidden during upload (see DocumentsRelationManager's
+    // form docblock) — category defaults, title falls back to the filename.
+    expect($document->category)->toBe(DocumentsRelationManager::DEFAULT_CATEGORY);
+    expect($document->title)->toBe('license.pdf');
+    expect($document->notes)->toBe('Renewed for 2026.');
     expect($document->uploaded_by)->toBe($admin->id);
     expect($document->subjectLabel())->toBe('Company profile');
     Storage::disk('documents')->assertExists($document->path);

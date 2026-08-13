@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Documents\DocumentResource\Pages;
 
 use App\Domain\Documents\Actions\UploadDocument;
 use App\Domain\Documents\Models\Document;
+use App\Filament\RelationManagers\DocumentsRelationManager;
 use App\Filament\Resources\Documents\DocumentResource;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Support\Facades\Auth;
@@ -25,7 +26,7 @@ class CreateDocument extends CreateRecord
         return app(UploadDocument::class)(
             documentable: $user->company,
             file: $data['file'],
-            category: $data['category'],
+            category: $data['category'] ?? DocumentsRelationManager::DEFAULT_CATEGORY,
             title: $data['title'] ?? null,
             notes: $data['notes'] ?? null,
             expiresAt: $data['expires_at'] ?? null,

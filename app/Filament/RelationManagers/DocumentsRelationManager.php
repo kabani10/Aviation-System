@@ -35,28 +35,59 @@ class DocumentsRelationManager extends RelationManager
 
     protected static ?string $recordTitleAttribute = 'title';
 
+    /**
+     * Filament defaults every relation manager to read-only on a resource's
+     * View page (Panel::hasReadOnlyRelationManagersOnResourceViewPagesByDefault(),
+     * true out of the box, never overridden here) — meaning Create/Edit/Delete
+     * silently disappear whenever a flight/customer/aircraft/supplier is
+     * opened via View instead of Edit, for every role including Admin, since
+     * this check runs before any permission check. Attaching paperwork isn't
+     * the kind of "edit mode" action that default is meant to guard, and
+     * several roles (Procurement, Finance, Management — see
+     * RolesAndPermissionsSeeder) only ever reach a resource's View page for
+     * flights, never Edit, so leaving this at its default would make
+     * document upload permanently unreachable for them, not just less
+     * convenient.
+     */
+    public function isReadOnly(): bool
+    {
+        return false;
+    }
+
+    /** UploadDocument's $category is a required, non-nullable column — this stands in whenever the upload form doesn't ask for one. */
+    public const DEFAULT_CATEGORY = 'general';
+
     public function form(Form $form): Form
     {
         return $form->schema([
+            // Uploading only ever asks for the file and an optional
+            // description — category/title/expiry are real columns
+            // (organizational metadata, not needed to get a file attached)
+            // still reachable via Edit afterward for whoever wants to set
+            // them, same "don't block the common case on the rare one" as
+            // the AI-draft review page's inline customer/aircraft creation.
             FileUpload::make('file')
                 ->required()
                 ->storeFiles(false)
                 ->hidden(fn (string $operation): bool => $operation === 'edit'),
 
+            Textarea::make('notes')
+                ->label('Description')
+                ->rows(2),
+
             TextInput::make('category')
-                ->required()
-                ->maxLength(255),
+                ->maxLength(255)
+                ->hidden(fn (string $operation): bool => $operation === 'create'),
 
             TextInput::make('title')
                 ->maxLength(255)
-                ->helperText('Defaults to the uploaded filename if left blank.'),
+                ->helperText('Defaults to the uploaded filename if left blank.')
+                ->hidden(fn (string $operation): bool => $operation === 'create'),
 
             DateTimePicker::make('expires_at')
                 ->native(false)
-                ->helperText('Leave blank if this document does not expire.'),
-
-            Textarea::make('notes')
-                ->rows(2),
+                ->helperText('Leave blank if this document does not expire.')
+                ->hidden(fn (string $operation): bool => $operation === 'create'),
         ]);
     }
 
@@ -81,7 +112,7 @@ class DocumentsRelationManager extends RelationManager
                     ->using(fn (array $data): Document => app(UploadDocument::class)(
                         documentable: $this->getOwnerRecord(),
                         file: $data['file'],
-                        category: $data['category'],
+                        category: $data['category'] ?? self::DEFAULT_CATEGORY,
                         title: $data['title'] ?? null,
                         notes: $data['notes'] ?? null,
                         expiresAt: $data['expires_at'] ?? null,

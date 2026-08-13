@@ -185,6 +185,18 @@ resource because the relationship name is always `documents`/`communications` (f
 `RelationManager`s (`ContactsRelationManager`, `AircraftRelationManager` under `CustomerResource`)
 stay nested under their resource as usual — only Documents/Communications are generic enough to share.
 
+**`DocumentsRelationManager::isReadOnly()` is hard-overridden to `false`.** Filament defaults every
+`RelationManager` to read-only on a resource's View page
+(`Panel::hasReadOnlyRelationManagersOnResourceViewPagesByDefault()`, on by default, never overridden
+in `AdminPanelProvider`) — Create/Edit/Delete silently disappear there, for every role including Admin,
+since `isReadOnly()` short-circuits before any permission check runs. This made document upload
+unreachable for any role that only ever reaches a resource's View page (Procurement/Finance/Management
+on `FlightRequestResource` — see "Flight Requests" below), not just less convenient for everyone else.
+Attaching paperwork isn't the kind of "edit mode" action that default is meant to guard against, so the
+override applies everywhere this shared component is used, not just on flight requests.
+`CommunicationsRelationManager` still has the default behavior — revisit the same way if that turns out
+to matter too.
+
 ## Customers & Aircraft
 
 `App\Domain\Customers\Models\Customer` — a client of the tenant (an operator or broker), not to be
